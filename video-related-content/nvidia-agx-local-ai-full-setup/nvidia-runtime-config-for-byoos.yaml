@@ -1,0 +1,18 @@
+stages:
+  initramfs:
+    - name: "Add Nvidia Container Runtime"
+      files:
+        - path: /etc/containerd/conf.d/nvidia.toml
+          permissions: 0644
+          owner: 0
+          group: 0
+          content: |-
+            [plugins.cri.containerd.runtimes.nvidia]
+              privileged_without_host_devices = false
+              runtime_engine = ""
+              runtime_root = ""
+              runtime_type = "io.containerd.runc.v2"
+
+            [plugins.cri.containerd.runtimes.nvidia.options]
+              BinaryName = "/usr/bin/nvidia-container-runtime"
+              Runtime = "/usr/bin/nvidia-container-runtime"

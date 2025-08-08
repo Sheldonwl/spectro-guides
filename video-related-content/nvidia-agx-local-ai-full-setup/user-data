@@ -1,0 +1,22 @@
+#cloud-config
+install:
+   reboot: true
+   poweroff: false
+
+stylus:
+   path: /persistent/spectro # You can remove this if you don't want to seperate the installed resources
+   vip:
+      skip: false
+   site:
+      edgeHostToken: [ADD YOUR OWN REGISTRATION TOKEN]
+      paletteEndpoint: api.spectrocloud.com
+      projectName: Edge-AI # Make sure to add the name of the project that maps to your Edge registration token
+      name: nvidia-orin-agx # This sets the hostname. Feel free to use a name of your own choosing. 
+
+stages:
+   initramfs:
+      - users: # example user
+         kairos:
+            groups:
+            - sudo
+            passwd: kairos
