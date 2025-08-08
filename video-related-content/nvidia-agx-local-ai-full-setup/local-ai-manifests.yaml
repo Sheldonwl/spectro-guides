@@ -1,0 +1,111 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: local-ai
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: models-pvc
+  namespace: local-ai
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 800Gi  # Reduced to match available storage
+  volumeMode: Filesystem
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: local-ai
+  namespace: local-ai
+  labels:
+    app: local-ai
+spec:
+  selector:
+    matchLabels:
+      app: local-ai
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: local-ai
+      name: local-ai
+    spec:
+      runtimeClassName: nvidia  # Added to use the NVIDIA runtime
+      initContainers:
+        - name: setup-env
+          image: python:3.10
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              apt update && apt upgrade -y && \
+              python -m pip install --upgrade pip && \
+              python -m venv /build/backend/python/vllm/venv && \
+              . /build/backend/python/vllm/venv/bin/activate && \
+              pip install uv grpcio grpcio-tools
+          volumeMounts:
+            - name: backend-volume
+              mountPath: /build/backend
+      containers:
+        - name: local-ai
+          args:
+            - phi-2
+          env:
+            - name: DEBUG
+              value: "true"
+            - name: LD_LIBRARY_PATH  # Added to ensure libraries are found
+              value: "/usr/lib/aarch64-linux-gnu/tegra:/usr/lib/aarch64-linux-gnu:/usr/local/cuda/lib64:/usr/lib/aarch64-linux-gnu/nvidia"  
+          image: localai/localai:latest-nvidia-l4t-arm64
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - name: models-volume
+              mountPath: /models
+            - name: backend-volume
+              mountPath: /build/backend
+            - name: tegra-lib  # Added to mount NVIDIA driver libraries
+              mountPath: /usr/lib/aarch64-linux-gnu/tegra
+            - name: cuda-lib
+              mountPath: /usr/local/cuda/lib64
+            - name: nvidia-lib
+              mountPath: /usr/lib/aarch64-linux-gnu/nvidia
+      volumes:
+        - name: models-volume
+          persistentVolumeClaim:
+            claimName: models-pvc
+        - name: backend-volume
+          emptyDir: {}
+        - name: tegra-lib  # Added to mount NVIDIA driver libraries
+          hostPath:
+            path: /usr/lib/aarch64-linux-gnu/tegra
+            type: Directory
+        - name: cuda-lib
+          hostPath:
+            path: /usr/local/cuda/lib64
+            type: Directory
+        - name: nvidia-lib
+          hostPath:
+            path: /usr/lib/aarch64-linux-gnu/nvidia
+            type: Directory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: local-ai
+  namespace: local-ai
+spec:
+  selector:
+    app: local-ai
+  type: NodePort
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: nvidia
+handler: nvidia
