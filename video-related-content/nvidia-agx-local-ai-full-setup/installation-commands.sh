@@ -37,6 +37,7 @@ stages:
             passwd: kairos
 EOF
 
+export USERDATA=./user-data
 curl --location --output ./palette-agent-install.sh https://github.com/spectrocloud/agent-mode/releases/latest/download/palette-agent-install.sh
 chmod +x ./palette-agent-install.sh
 sudo --preserve-env ./palette-agent-install.sh
