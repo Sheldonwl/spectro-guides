@@ -3,7 +3,7 @@ This script is a simple example of how to deploy an Edge Agent using the Edge Ag
 
 - Create a registration token in Palette and use that for the **TOKEN** variable in the script
 - If you're using a self-hosted instance of Palette, you need to change the **paletteEndpoint** to point to your self-hosted instance. Make sure to have a valid FQDN and a valid certificate for the self-hosted instance. 
-- The **name** variable will be used for the hostname of the Edge device and the name shown in Palette. This name must be unique within the Palette cluster.
+- The **name** variable will be used for the hostname of the Edge device and the name shown in Palette. This name must be unique within the Palette tenant.
 - Add your custom CA cert to the **caCerts** field in the script. Make sure to use the correct format for the cert. If you are using the self-signed certs created by Palette, you can find the CA in System Console -> Administration -> System Address. Copy the CA and decode it using base64. 
 
 ### Agent Mode prerequisites
