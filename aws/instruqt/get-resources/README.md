@@ -6,7 +6,7 @@ No credentials or secrets are stored in this script. It uses your existing AWS C
 
 ---
 
-## 📋 Features
+## Features
 
 * Shows total, used, and remaining **EC2 vCPUs**.
 * Shows total, used, and remaining **Elastic IPs**.
@@ -19,7 +19,7 @@ No credentials or secrets are stored in this script. It uses your existing AWS C
 
 ---
 
-## 🛠️ Setup
+## Setup
 
 1. **Clone or create the script:**
 
@@ -50,7 +50,7 @@ No credentials or secrets are stored in this script. It uses your existing AWS C
 
 ---
 
-## 🚀 Usage
+## Usage
 
 Run the script with an optional region argument. If no region is provided, it defaults to `us-east-1`.
 
@@ -78,7 +78,7 @@ Report generated for region: us-east-1
 
 ---
 
-## 🔒 Security
+## Security
 
 This script:
 
@@ -88,7 +88,7 @@ This script:
 
 ---
 
-## 📄 License
+## License
 
 **MIT License** — feel free to use, modify, and share.
 

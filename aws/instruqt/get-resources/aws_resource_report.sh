@@ -7,7 +7,7 @@
 #   and basic networking resources (Elastic IPs) using read-only
 #   AWS CLI commands.
 #
-#   ✅ No credentials or secrets are stored in this file.
+#   No credentials or secrets are stored in this file.
 #   It uses your existing AWS CLI authentication (env vars,
 #   IAM role, or credentials file).
 #
