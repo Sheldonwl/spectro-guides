@@ -1,0 +1,37 @@
+#cloud-config
+packages:
+  - jq
+  - conntrack
+  - zstd 
+  - rsync 
+  - systemd-timesyncd 
+  - rsyslog
+write_files:
+  - path: /tmp/user-data
+    owner: 'root:root'
+    permissions: '0755'
+    content: |
+      #cloud-config
+      install:
+        reboot: true
+        poweroff: false
+      stylus:
+        site:
+          edgeHostToken: [ADD_YOUR_TOKEN_HERE]
+          paletteEndpoint: [ADD_YOUR_PALETTE_ENDPOINT_HERE]
+          projectName: [ADD_YOUR_PROJECT_NAME_HERE]
+stages:
+   initramfs:
+      - users:
+         kairos:
+            groups:
+            - sudo
+            passwd: kairos
+runcmd:
+  - |
+    mkdir -p /system/oem; mkdir -p /oem; mkdir -p /usr/local/cloud-config; mkdir -p /opt/spectrocloud/state
+    curl --location --output /tmp/palette-agent-install.sh https://github.com/spectrocloud/agent-mode/releases/latest/download/palette-agent-install.sh
+    chmod +x /tmp/palette-agent-install.sh
+    export USERDATA=/tmp/user-data
+    sed -i "s/%NAME%/$(hostname)/" /tmp/user-data
+    sudo --preserve-env /tmp/palette-agent-install.sh
