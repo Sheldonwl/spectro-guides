@@ -620,20 +620,46 @@ spec:
   storageClassName: demo-storageclass
 ```
 
+### DataVolume for VM Provisioning (with CDI)
+
+First, create a DataVolume to download the Ubuntu cloud image:
+
+```yaml
+# datavolume-ubuntu.yaml
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: DataVolume
+metadata:
+  name: ubuntu-dv
+spec:
+  source:
+    http:
+      url: "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
+  pvc:
+    accessModes:
+      - ReadWriteMany
+    volumeMode: Block
+    resources:
+      requests:
+        storage: 30Gi
+    storageClassName: ibm-flash-rwx-block
+```
+
 ### KubeVirt VM with Live Migration Enabled
+
+Once the DataVolume is created and the image is imported, create a VM that references it:
 
 ```yaml
 # kubevirt-vm-livemigration.yaml
 apiVersion: kubevirt.io/v1
 kind: VirtualMachine
 metadata:
-  name: fedora-vm
+  name: ubuntu-vm
 spec:
   running: true
   template:
     metadata:
       labels:
-        kubevirt.io/vm: fedora-vm
+        kubevirt.io/vm: ubuntu-vm
     spec:
       domain:
         devices:
@@ -656,45 +682,23 @@ spec:
       volumes:
         - name: rootdisk
           persistentVolumeClaim:
-            claimName: vm-disk-rwx
+            claimName: ubuntu-dv
         - name: cloudinitdisk
           cloudInitNoCloud:
             userData: |
               #cloud-config
-              password: fedora
+              password: ubuntu
               chpasswd: { expire: False }
       # Enable live migration
       evictionStrategy: LiveMigrate
 ```
 
-### DataVolume for VM Provisioning (with CDI)
+### RWX Block PVC for Multiple VMs
+
+For scenarios where multiple VMs need access to the same storage (e.g., clustered applications):
 
 ```yaml
-# datavolume-vm.yaml
-apiVersion: cdi.kubevirt.io/v1beta1
-kind: DataVolume
-metadata:
-  name: fedora-dv
-spec:
-  source:
-    registry:
-      url: "docker://quay.io/containerdisks/fedora:latest"
-  pvc:
-    accessModes:
-      - ReadWriteMany
-    volumeMode: Block
-    resources:
-      requests:
-        storage: 30Gi
-    storageClassName: ibm-flash-rwx-block
-```
-
-### Shareable Disk Between VMs
-
-For clustered applications or shared storage scenarios:
-
-```yaml
-# shared-disk-pvc.yaml
+# rwx-block-pvc.yaml
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -707,37 +711,9 @@ spec:
     requests:
       storage: 100Gi
   storageClassName: ibm-flash-rwx-block
----
-# VM using shareable disk
-apiVersion: kubevirt.io/v1
-kind: VirtualMachine
-metadata:
-  name: cluster-node-1
-spec:
-  running: true
-  template:
-    spec:
-      domain:
-        devices:
-          disks:
-            - name: rootdisk
-              disk:
-                bus: virtio
-            - name: shareddisk
-              disk:
-                bus: virtio
-              shareable: true    # Enable sharing
-        resources:
-          requests:
-            memory: 4Gi
-      volumes:
-        - name: rootdisk
-          persistentVolumeClaim:
-            claimName: node1-root
-        - name: shareddisk
-          persistentVolumeClaim:
-            claimName: shared-cluster-disk
 ```
+
+> **Note**: When using RWX block volumes with multiple VMs, the application inside the VMs must handle concurrent access (e.g., clustered filesystems like GFS2, OCFS2, or database clustering).
 
 ---
 
@@ -800,16 +776,16 @@ kubectl get pvc test-rwx-block
 # (Use the kubevirt-vm-livemigration.yaml from above)
 
 # Verify VM is running
-kubectl get vmi fedora-vm
+kubectl get vmi ubuntu-vm
 
 # Initiate live migration
-virtctl migrate fedora-vm
+virtctl migrate ubuntu-vm
 
 # Watch migration progress
 kubectl get vmim -w
 
 # Verify VM moved to different node
-kubectl get vmi fedora-vm -o wide
+kubectl get vmi ubuntu-vm -o wide
 ```
 
 ### Test 4: Volume Snapshot
