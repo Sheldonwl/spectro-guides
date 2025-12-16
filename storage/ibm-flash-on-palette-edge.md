@@ -7,8 +7,12 @@ This guide covers building immutable Palette Edge images with IBM FlashSystem st
 - [Overview](#overview)
 - [Unique Host Identifiers to Verify](#unique-host-identifiers-to-verify)
 - [CanvOS Build Configuration](#canvos-build-configuration)
-- [User Data Configuration](#user-data-configuration)
-- [Dockerfile Customizations](#dockerfile-customizations)
+  - [Step 1: Clone and Checkout](#step-1-clone-and-checkout)
+  - [Step 2: Create .arg File](#step-2-create-arg-file)
+  - [Step 3: Create user-data File](#step-3-create-user-data-file)
+  - [Step 4: Create Dockerfile](#step-4-create-dockerfile)
+  - [Step 5: Build Images](#step-5-build-images)
+  - [Step 6: Push to Registry](#step-6-push-to-registry)
 - [Post-Deployment Validation](#post-deployment-validation)
 
 ---
@@ -104,7 +108,9 @@ kubectl get hostdefinitions -A
 
 ## CanvOS Build Configuration
 
-Clone CanvOS and configure for IBM FlashSystem support:
+### Step 1: Clone and Checkout
+
+Clone CanvOS and checkout the appropriate version:
 
 ```bash
 git clone https://github.com/spectrocloud/CanvOS.git
@@ -112,9 +118,15 @@ cd CanvOS
 git checkout v4.8.1
 ```
 
-### .arg File
+### Step 2: Create .arg File
 
-Create `.arg` file with the following configuration:
+Copy the template and modify for IBM FlashSystem support:
+
+```bash
+cp .arg.template .arg
+```
+
+Edit `.arg` with the following configuration:
 
 ```bash
 CANVOS_VERSION=v4.8.1
@@ -146,121 +158,9 @@ EDGE_CUSTOM_CONFIG=.edge-custom-config.yaml
 # AUTO_ENROLL_SECUREBOOT_KEYS=false     # Set to true to automatically enroll certificates on devices in Setup Mode, useful for flashing devices without user interaction
 ```
 
----
+### Step 3: Create user-data File
 
-## Building the Image and ISO
-
-### Prerequisites
-
-Ensure you have Docker installed on your build machine:
-
-```bash
-# Docker (required) - Earthly runs inside a container, no separate install needed
-docker --version
-```
-
-> **Note**: CanvOS uses `earthly.sh` which runs Earthly inside a Docker container. You do **not** need to install Earthly separately.
-
-### Step 1: Build All Images (Provider + ISO)
-
-Build both the provider images and installer ISO in one command:
-
-```bash
-# From the CanvOS directory
-./earthly.sh +build-all-images --ARCH=amd64
-```
-
-Or build them separately:
-
-```bash
-# Build only the provider images
-./earthly.sh +build-provider-images --ARCH=amd64
-
-# Build only the installer ISO
-./earthly.sh +iso --ARCH=amd64
-```
-
-### Step 2: Verify the Build
-
-```bash
-# Check the ISO was created
-ls -lh build/
-# Output: palette-edge-installer.iso, palette-edge-installer.iso.sha256
-
-# Check the provider images were created
-docker images | grep <IMAGE_REGISTRY>
-```
-
-Example output:
-```
-REPOSITORY              TAG                              IMAGE ID       CREATED        SIZE
-fake/canvos             k3s-1.33.5-v4.8.1-multipath      cad8acdd2797   17 hours ago   4.62GB
-```
-
-### Step 3: Push Images to Registry
-
-The provider images are **not automatically pushed**. Push them manually:
-
-```bash
-# Login to your registry
-docker login <IMAGE_REGISTRY>
-
-# Push the provider image (use the tag WITHOUT _linux_amd64 suffix)
-docker push <IMAGE_REGISTRY>/<IMAGE_REPO>:<K8S_DISTRIBUTION>-<K8S_VERSION>-<CANVOS_VERSION>-<CUSTOM_TAG>
-
-# Example:
-docker push fake/canvos:k3s-1.33.5-v4.8.1-multipath
-```
-
-### Step 4: Use the system.uri in Palette
-
-After building, the output will show the `system.uri` to use in your cluster profile:
-
-```yaml
-system.uri: "{{ .spectro.pack.edge-native-byoi.options.system.registry }}/{{ .spectro.pack.edge-native-byoi.options.system.repo }}:{{ .spectro.pack.edge-native-byoi.options.system.k8sDistribution }}-{{ .spectro.system.kubernetes.version }}-{{ .spectro.pack.edge-native-byoi.options.system.peVersion }}-{{ .spectro.pack.edge-native-byoi.options.system.customTag }}"
-system.registry: fake
-system.repo: canvos
-system.k8sDistribution: k3s
-system.osName: ubuntu
-system.peVersion: v4.8.1
-system.customTag: multipath
-system.osVersion: 24.04
-```
-
-### Build Summary
-
-| Artifact | Location | Purpose |
-|----------|----------|---------|
-| Provider Image | `<REGISTRY>/<REPO>:<TAG>` | Container image for Palette Edge |
-| Installer ISO | `./build/palette-edge-installer.iso` | Bootable ISO for edge device installation |
-
-### Common Build Issues
-
-**Docker permission denied**:
-```bash
-# Add user to docker group
-sudo usermod -aG docker $USER
-newgrp docker
-```
-
-**Registry authentication failed**:
-```bash
-# Ensure you're logged in
-docker login <IMAGE_REGISTRY>
-```
-
-**Proxy issues**:
-```bash
-# Configure git proxy if behind a proxy
-git config --global http.proxy <your-proxy-server>
-git config --global https.proxy <your-proxy-server>
-```
-
----
-
-## User Data Configuration
-
-Create `user-data` file with multipath and iSCSI service configuration:
+Create the `user-data` file with multipath and iSCSI service configuration:
 
 ```yaml
 #cloud-config
@@ -311,7 +211,7 @@ stages:
         - systemctl start open-iscsi.service
 ```
 
-### Ensuring Unique iSCSI IQN Per Host (Optional)
+#### Ensuring Unique iSCSI IQN Per Host (Optional)
 
 > **Note**: On Palette Edge devices, the iSCSI IQN is typically **generated randomly on first boot** by the `open-iscsi` package. This section is only needed if you're experiencing duplicate IQN issues (e.g., cloning VMs or using pre-configured images where the IQN was already set).
 
@@ -336,11 +236,9 @@ stages:
         - systemctl start open-iscsi.service
 ```
 
----
+### Step 4: Create Dockerfile
 
-## Dockerfile Customizations
-
-Add IBM FlashSystem required packages to the Dockerfile:
+Add IBM FlashSystem required packages to the `Dockerfile`:
 
 ```dockerfile
 ARG BASE
@@ -398,6 +296,90 @@ RUN apt-get update && \
 | `multipath-tools` | **Required** - Device mapper multipathing for FC/iSCSI |
 | `open-iscsi` | Required for iSCSI connectivity |
 | `nfs-common` | Optional - Only if using NFS for other workloads |
+
+### Step 5: Build Images
+
+Ensure you have Docker installed (Earthly runs inside a container, no separate install needed):
+
+```bash
+docker --version
+```
+
+Build both the provider images and installer ISO:
+
+```bash
+# From the CanvOS directory
+./earthly.sh +build-all-images --ARCH=amd64
+```
+
+Or build them separately:
+
+```bash
+# Build only the provider images
+./earthly.sh +build-provider-images --ARCH=amd64
+
+# Build only the installer ISO
+./earthly.sh +iso --ARCH=amd64
+```
+
+Verify the build:
+
+```bash
+# Check the ISO was created
+ls -lh build/
+# Output: palette-edge-installer.iso, palette-edge-installer.iso.sha256
+
+# Check the provider images were created
+docker images | grep canvos
+```
+
+### Step 6: Push to Registry
+
+The provider images are **not automatically pushed**. Push them manually:
+
+```bash
+# Login to your registry
+docker login <IMAGE_REGISTRY>
+
+# Push the provider image (use the tag WITHOUT _linux_amd64 suffix)
+docker push <IMAGE_REGISTRY>/<IMAGE_REPO>:<K8S_DISTRIBUTION>-<K8S_VERSION>-<CANVOS_VERSION>-<CUSTOM_TAG>
+
+# Example:
+docker push fake/canvos:k3s-1.33.5-v4.8.1-multipath
+```
+
+After building, the output will show the `system.uri` to use in your cluster profile:
+
+```yaml
+system.uri: "{{ .spectro.pack.edge-native-byoi.options.system.registry }}/{{ .spectro.pack.edge-native-byoi.options.system.repo }}:{{ .spectro.pack.edge-native-byoi.options.system.k8sDistribution }}-{{ .spectro.system.kubernetes.version }}-{{ .spectro.pack.edge-native-byoi.options.system.peVersion }}-{{ .spectro.pack.edge-native-byoi.options.system.customTag }}"
+system.registry: fake
+system.repo: canvos
+system.k8sDistribution: k3s
+system.osName: ubuntu
+system.peVersion: v4.8.1
+system.customTag: multipath
+system.osVersion: 24.04
+```
+
+### Build Summary
+
+| Artifact | Location | Purpose |
+|----------|----------|---------|
+| Provider Image | `<REGISTRY>/<REPO>:<TAG>` | Container image for Palette Edge |
+| Installer ISO | `./build/palette-edge-installer.iso` | Bootable ISO for edge device installation |
+
+### Common Build Issues
+
+**Docker permission denied**:
+```bash
+sudo usermod -aG docker $USER && newgrp docker
+```
+
+**Proxy issues**:
+```bash
+git config --global http.proxy <your-proxy-server>
+git config --global https.proxy <your-proxy-server>
+```
 
 ---
 
