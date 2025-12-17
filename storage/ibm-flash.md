@@ -15,6 +15,7 @@ This guide covers setting up IBM FlashSystem 7300 and 9000 series storage arrays
 - [Testing and Validation](#testing-and-validation)
 - [Limitations and Considerations](#limitations-and-considerations)
 - [Troubleshooting](#troubleshooting)
+- [HyperSwap Configuration](#hyperswap-configuration)
 
 ---
 
@@ -210,7 +211,18 @@ spec:
   node:
     repository: ibmcom/ibm-block-csi-driver-node
     tag: "1.13.0"
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: node-role.kubernetes.io/control-plane
+                  operator: DoesNotExist
 ```
+
+**Affinity Configuration Explained**:
+- **Controller**: Scheduled on control plane nodes (`operator: Exists`) - the controller manages provisioning and doesn't require multipath
+- **Node DaemonSet**: Scheduled only on worker nodes (`operator: DoesNotExist`) - these nodes must have multipath configured for volume attachment
 
 ```bash
 kubectl apply -f ibm-block-csi-cr.yaml
@@ -1099,6 +1111,66 @@ done
 # View CSI driver events
 kubectl get events --field-selector reason=ProvisioningFailed
 ```
+
+---
+
+## HyperSwap Configuration
+
+IBM HyperSwap provides active-active high availability across two sites with automatic failover. HyperSwap is primarily configured at the **storage array level**, but there are Kubernetes considerations for optimal operation.
+
+### Storage Array Configuration (Required)
+
+HyperSwap must be configured on the IBM FlashSystem arrays by your storage administrator:
+
+1. **Two-site topology** with mirrored storage pools
+2. **HyperSwap relationships** configured between volumes
+3. **Quorum disks** for split-brain prevention
+4. **IP replication links** between sites
+
+> **Source**: [IBM Docs - HyperSwap](https://www.ibm.com/docs/en/flashsystem-9x00/8.6.x?topic=hyperswap-overview)
+
+### Kubernetes Configuration (Optional)
+
+The CSI driver **automatically detects** HyperSwap volumes. No special Kubernetes configuration is required for basic operation.
+
+#### StorageClass for HyperSwap Pools
+
+Point your StorageClass to a HyperSwap-enabled pool:
+
+```yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ibm-hyperswap
+provisioner: block.csi.ibm.com
+parameters:
+  SpaceEfficiency: thin
+  pool: hyperswap_pool              # Your HyperSwap-enabled pool
+  volume_name_prefix: hs
+  csi.storage.k8s.io/fstype: ext4
+  csi.storage.k8s.io/secret-name: demo-secret
+  csi.storage.k8s.io/secret-namespace: default
+allowVolumeExpansion: true
+```
+
+### HyperSwap Behavior
+
+| Scenario | Behavior |
+|----------|----------|
+| Normal operation | I/O served from preferred site |
+| Site failure | Automatic failover to surviving site (no Kubernetes action needed) |
+| Site recovery | Automatic resynchronization |
+| Split-brain | Quorum determines which site continues |
+
+### Considerations
+
+1. **Latency**: HyperSwap requires synchronous replication - ensure low latency (<5ms) between sites
+2. **Capacity**: Both sites need identical capacity for mirrored pools
+3. **Network**: Dedicated replication network recommended
+4. **Kubernetes nodes**: Can be in one site or spread across both sites
+5. **No CSI-level configuration**: HyperSwap is transparent to the CSI driver
+
+> **Note**: For disaster recovery across longer distances (>300km), consider Metro Mirror or Global Mirror instead of HyperSwap.
 
 ---
 
