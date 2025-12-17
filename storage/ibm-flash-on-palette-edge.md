@@ -130,7 +130,6 @@ cp .arg.template .arg
 Edit `.arg` with the following configuration:
 
 ```bash
-CANVOS_VERSION=v4.8.1
 K8S_VERSION=1.33.5
 CUSTOM_TAG=multipath
 IMAGE_REGISTRY=fake
@@ -546,5 +545,6 @@ echo "1" > /sys/class/fc_host/host*/issue_lip
 
 - [CanvOS Repository](https://github.com/spectrocloud/CanvOS)
 - [IBM Block CSI Driver Documentation](https://www.ibm.com/docs/en/stg-block-csi-driver/1.12.5?topic=configuring)
+- [IBM Docs - Settings for Linux hosts](https://www.ibm.com/docs/en/flashsystem-7x00/8.6.0?topic=system-settings-linux-hosts)
 - [Palette Edge Documentation](https://docs.spectrocloud.com/clusters/edge/)
 - [IBM FlashSystem Storage Guide](ibm-flash.md)

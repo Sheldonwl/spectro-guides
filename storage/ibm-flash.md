@@ -188,7 +188,7 @@ After updating, reload the configuration:
 multipathd reconfigure
 ```
 
-> **Source**: [IBM Docs - Linux Host Requirements](https://www.ibm.com/docs/en/flashsystem-c200/9.1.1?topic=system-requirements-attaching-systems-hosts-running-linux)
+> **Source**: [IBM Docs - Settings for Linux hosts](https://www.ibm.com/docs/en/flashsystem-7x00/8.6.0?topic=system-settings-linux-hosts)
 
 #### SCSI Inquiry Timeout (Kernel Parameter)
 
@@ -243,7 +243,7 @@ cat /sys/block/sdX/device/timeout
 # Should show: 120
 ```
 
-> **Source**: [IBM Docs - Linux Host Requirements](https://www.ibm.com/docs/en/flashsystem-c200/9.1.1?topic=system-requirements-attaching-systems-hosts-running-linux)
+> **Source**: [IBM Docs - Settings for Linux hosts](https://www.ibm.com/docs/en/flashsystem-7x00/8.6.0?topic=system-settings-linux-hosts)
 
 **Validation - verify multipath is running**:
 ```bash
