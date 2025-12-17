@@ -41,16 +41,17 @@ cat /etc/iscsi/initiatorname.iscsi
 
 **If duplicated**, regenerate with:
 ```bash
-# Generate new unique IQN based on hostname
-echo "InitiatorName=iqn.$(date +%Y-%m).$(hostname -d | awk -F. '{for(i=NF;i>0;i--) printf $i"."}' | sed 's/\.$//')$(hostname -s)" > /etc/iscsi/initiatorname.iscsi
+# Preferred method: Delete the file and restart iscsid to regenerate
+rm /etc/iscsi/initiatorname.iscsi
+systemctl restart iscsid
 
-# Or use iscsi-iname utility
-iscsi-iname > /etc/iscsi/initiatorname.iscsi
-
-# Restart iSCSI services
+# Alternative: Use iscsi-iname utility to generate a proper IQN
+echo "InitiatorName=$(iscsi-iname)" > /etc/iscsi/initiatorname.iscsi
 systemctl restart iscsid
 systemctl restart open-iscsi
 ```
+
+> **Note**: The IQN format includes an OS-specific prefix (e.g., `iqn.2004-10.com.ubuntu`). Using `iscsi-iname` or letting `iscsid` regenerate preserves this standard format.
 
 ### Fibre Channel WWPNs
 
@@ -193,9 +194,35 @@ stages:
           group: 0
           content: |
             defaults {
-              user_friendly_names yes
-              find_multipaths yes
+                user_friendly_names yes
+                find_multipaths yes
+                polling_interval 5
             }
+            
+            devices {
+                device {
+                    vendor "IBM"
+                    product "2145"
+                    path_grouping_policy group_by_prio
+                    path_selector "service-time 0"
+                    prio alua
+                    path_checker tur
+                    failback immediate
+                    no_path_retry 5
+                    rr_weight uniform
+                    rr_min_io_rq 1
+                    dev_loss_tmo 120
+                    fast_io_fail_tmo 5
+                    retain_attached_hw_handler yes
+                }
+            }
+        - path: /etc/udev/rules.d/99-ibm-2145.rules
+          permissions: 0644
+          owner: 0
+          group: 0
+          content: |
+            # Set SCSI command timeout to 120s (default == 30 or 60) for IBM 2145 devices
+            SUBSYSTEM=="block", ACTION=="add", ENV{ID_VENDOR}=="IBM", ENV{ID_MODEL}=="2145", RUN+="/bin/sh -c 'echo 120 >/sys/block/%k/device/timeout'"
   rootfs:
     - name: enable-storage-services
       commands:
@@ -222,11 +249,10 @@ stages:
   boot:
     - name: ensure-unique-iscsi-iqn
       commands:
-        # Generate unique IQN if it contains the default/cloned value
+        # Regenerate IQN if it contains a known cloned/default value
         - |
           if grep -q "iqn.1993-08.org.debian" /etc/iscsi/initiatorname.iscsi 2>/dev/null; then
-            NEW_IQN="iqn.$(date +%Y-%m).com.spectrocloud:$(hostname)"
-            echo "InitiatorName=$NEW_IQN" > /etc/iscsi/initiatorname.iscsi
+            rm -f /etc/iscsi/initiatorname.iscsi
             systemctl restart iscsid
           fi
     - name: start-storage-services
@@ -235,6 +261,8 @@ stages:
         - systemctl start iscsid.socket
         - systemctl start open-iscsi.service
 ```
+
+> **Note**: Deleting the file and restarting `iscsid` allows the OS to regenerate a proper IQN with the correct OS-specific prefix (e.g., `iqn.2004-10.com.ubuntu`).
 
 ### Step 4: Create Dockerfile
 
@@ -464,13 +492,21 @@ kubectl delete pvc test-ibm-pvc
 
 **Solution**:
 ```bash
-# On each affected host, regenerate IQN
-NEW_IQN="iqn.$(date +%Y-%m).com.spectrocloud:$(hostname)"
-echo "InitiatorName=$NEW_IQN" > /etc/iscsi/initiatorname.iscsi
+# On each affected host, delete the IQN file and let iscsid regenerate it
+rm -f /etc/iscsi/initiatorname.iscsi
+systemctl restart iscsid
+
+# Verify the new IQN was generated
+cat /etc/iscsi/initiatorname.iscsi
+
+# Alternative: Use iscsi-iname to generate a proper IQN
+echo "InitiatorName=$(iscsi-iname)" > /etc/iscsi/initiatorname.iscsi
 systemctl restart iscsid open-iscsi
 
 # Verify on FlashSystem that hosts now appear separately
 ```
+
+> **Note**: The IQN format includes an OS-specific prefix (e.g., `iqn.2004-10.com.ubuntu`). Using `iscsi-iname` or letting `iscsid` regenerate preserves this standard format.
 
 ### Host Definition Shows Wrong Node
 

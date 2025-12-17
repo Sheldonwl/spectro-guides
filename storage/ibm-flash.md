@@ -139,6 +139,112 @@ systemctl enable multipathd.service
 systemctl start multipathd.service
 ```
 
+#### IBM Recommended multipath.conf Settings
+
+IBM recommends specific multipath settings for FlashSystem/Storage Virtualize (product ID 2145). These settings dramatically affect reliability, especially path selection and device loss timeouts.
+
+Create or update `/etc/multipath.conf`:
+
+```conf
+defaults {
+    user_friendly_names yes
+    find_multipaths yes
+    polling_interval 5
+}
+
+devices {
+    device {
+        vendor "IBM"
+        product "2145"
+        path_grouping_policy group_by_prio
+        path_selector "service-time 0"
+        prio alua
+        path_checker tur
+        failback immediate
+        no_path_retry 5
+        rr_weight uniform
+        rr_min_io_rq 1
+        dev_loss_tmo 120
+        fast_io_fail_tmo 5
+        retain_attached_hw_handler yes
+    }
+}
+```
+
+**Key settings explained**:
+
+| Setting | Value | Purpose |
+|---------|-------|--------|
+| `path_selector` | `service-time 0` | Optimal path selection algorithm |
+| `dev_loss_tmo` | `120` | Seconds to wait before pruning paths (120-150 recommended) |
+| `fast_io_fail_tmo` | `5` | Seconds before failing I/O on a failed path |
+| `no_path_retry` | `5` | Retry count before failing I/O when no paths available |
+| `failback` | `immediate` | Immediately use restored paths |
+| `prio` | `alua` | Use ALUA for path prioritization |
+
+After updating, reload the configuration:
+
+```bash
+multipathd reconfigure
+```
+
+> **Source**: [IBM Docs - Linux Host Requirements](https://www.ibm.com/docs/en/flashsystem-c200/9.1.1?topic=system-requirements-attaching-systems-hosts-running-linux)
+
+#### SCSI Inquiry Timeout (Kernel Parameter)
+
+Add the SCSI inquiry timeout to the kernel boot parameters for path recovery during failover:
+
+```bash
+# Edit GRUB configuration
+# For Ubuntu/Debian:
+vi /etc/default/grub
+
+# Add to GRUB_CMDLINE_LINUX_DEFAULT:
+GRUB_CMDLINE_LINUX_DEFAULT="scsi_mod.inq_timeout=70"
+
+# Regenerate GRUB config
+update-grub
+
+# For RHEL/CentOS:
+# Edit /etc/sysconfig/grub, add to GRUB_CMDLINE_LINUX
+# Then run: grub2-mkconfig -o /etc/grub2.cfg
+```
+
+To apply immediately without reboot:
+
+```bash
+echo 70 > /sys/module/scsi_mod/parameters/inq_timeout
+```
+
+#### SCSI Command Timeout (udev Rule)
+
+Create a udev rule to set SCSI command timeout to 120 seconds for IBM 2145 devices:
+
+```bash
+# Create udev rule
+cat > /etc/udev/rules.d/99-ibm-2145.rules << 'EOF'
+# Set SCSI command timeout to 120s (default == 30 or 60) for IBM 2145 devices
+SUBSYSTEM=="block", ACTION=="add", ENV{ID_VENDOR}=="IBM", ENV{ID_MODEL}=="2145", RUN+="/bin/sh -c 'echo 120 >/sys/block/%k/device/timeout'"
+EOF
+
+# Reload udev rules
+udevadm control -R
+udevadm trigger --type=devices --action=add
+```
+
+Verify after volumes are attached:
+
+```bash
+# Find block devices
+multipath -ll | grep sd
+
+# Check timeout for each device (replace sdX)
+cat /sys/block/sdX/device/timeout
+# Should show: 120
+```
+
+> **Source**: [IBM Docs - Linux Host Requirements](https://www.ibm.com/docs/en/flashsystem-c200/9.1.1?topic=system-requirements-attaching-systems-hosts-running-linux)
+
 **Validation - verify multipath is running**:
 ```bash
 # Check service status
