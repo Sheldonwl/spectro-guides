@@ -835,7 +835,13 @@ spec:
 
 ### Forklift / Migration Toolkit for Virtualization
 
-When using [Forklift](https://github.com/kubev2v/forklift) (Migration Toolkit for Virtualization) to migrate VMs from VMware, Hyper-V, or other platforms to KubeVirt, you need a StorageClass with **Immediate** binding mode instead of `WaitForFirstConsumer`.
+When using [Forklift](https://github.com/kubev2v/forklift) (Migration Toolkit for Virtualization) to migrate VMs to KubeVirt, you need a StorageClass with **Immediate** binding mode instead of `WaitForFirstConsumer`.
+
+**Supported source providers**:
+- VMware vSphere
+- Red Hat Virtualization (RHV)
+- OpenStack
+- Open Virtual Appliances (OVA)
 
 #### Why Immediate Binding?
 
