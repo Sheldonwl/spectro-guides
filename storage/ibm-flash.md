@@ -833,6 +833,110 @@ spec:
 
 > **Note**: When using RWX block volumes with multiple VMs, the application inside the VMs must handle concurrent access (e.g., clustered filesystems like GFS2, OCFS2, or database clustering).
 
+### Forklift / Migration Toolkit for Virtualization
+
+When using [Forklift](https://github.com/kubev2v/forklift) (Migration Toolkit for Virtualization) to migrate VMs from VMware, Hyper-V, or other platforms to KubeVirt, you need a StorageClass with **Immediate** binding mode instead of `WaitForFirstConsumer`.
+
+#### Why Immediate Binding?
+
+Forklift creates PVCs before scheduling the target VM. With `WaitForFirstConsumer`, the PVC stays `Pending` until a pod consumes it, causing migration failures.
+
+| Binding Mode | Use Case |
+|--------------|----------|
+| `WaitForFirstConsumer` | Normal workloads (recommended default) |
+| `Immediate` | Forklift migrations, CDI imports |
+
+#### Creating a StorageClass for Forklift
+
+**Option 1: Export and modify existing StorageClass**
+
+```bash
+# Export existing StorageClass to YAML
+kubectl get storageclass ibm-flash-rwx-block -o yaml > ibm-flash-forklift.yaml
+
+# Edit the file:
+# 1. Change metadata.name to ibm-flash-forklift
+# 2. Remove metadata.uid, resourceVersion, creationTimestamp
+# 3. Change volumeBindingMode to Immediate
+
+# Apply the new StorageClass
+kubectl apply -f ibm-flash-forklift.yaml
+```
+
+**Option 2: Create directly**
+
+```yaml
+# ibm-flash-forklift-storageclass.yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ibm-flash-forklift
+provisioner: block.csi.ibm.com
+parameters:
+  pool: demo-pool
+  SpaceEfficiency: thin
+  csi.storage.k8s.io/fstype: ext4
+  csi.storage.k8s.io/secret-name: demo-secret
+  csi.storage.k8s.io/secret-namespace: default
+allowVolumeExpansion: true
+volumeBindingMode: Immediate              # Required for Forklift
+```
+
+```bash
+kubectl apply -f ibm-flash-forklift-storageclass.yaml
+```
+
+#### One-liner to Copy and Modify StorageClass
+
+```bash
+# Copy existing SC and change binding mode to Immediate
+kubectl get storageclass ibm-flash-rwx-block -o json | \
+  jq 'del(.metadata.uid, .metadata.resourceVersion, .metadata.creationTimestamp, .metadata.annotations) | 
+      .metadata.name = "ibm-flash-forklift" | 
+      .volumeBindingMode = "Immediate"' | \
+  kubectl apply -f -
+```
+
+#### Configure Forklift to Use the StorageClass
+
+In your Forklift `StorageMap`, reference the new StorageClass:
+
+```yaml
+apiVersion: forklift.konveyor.io/v1beta1
+kind: StorageMap
+metadata:
+  name: ibm-flash-storage-map
+  namespace: openshift-mtv
+spec:
+  map:
+    - source:
+        id: datastore-12345    # VMware datastore ID
+      destination:
+        storageClass: ibm-flash-forklift
+        accessMode: ReadWriteMany
+        volumeMode: Block
+  provider:
+    source:
+      name: vmware-provider
+      namespace: openshift-mtv
+    destination:
+      name: host
+      namespace: openshift-mtv
+```
+
+#### Verify Migration PVC
+
+After starting a migration, verify the PVC is created and bound:
+
+```bash
+# Check PVCs created by Forklift
+kubectl get pvc -n <migration-namespace>
+
+# Should show Bound status immediately (not Pending)
+NAME                    STATUS   VOLUME         CAPACITY   ACCESS MODES   STORAGECLASS
+vm-disk-0               Bound    pvc-abc123     50Gi       RWX            ibm-flash-forklift
+```
+
 ---
 
 ## Testing and Validation
