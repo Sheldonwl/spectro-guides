@@ -903,48 +903,6 @@ kubectl get storageclass ibm-flash-rwx-block -o json | \
   kubectl apply -f -
 ```
 
-#### Configure Forklift to Use the StorageClass
-
-In your Forklift `StorageMap`, reference the new StorageClass:
-
-```yaml
-apiVersion: forklift.konveyor.io/v1beta1
-kind: StorageMap
-metadata:
-  name: ibm-flash-storage-map
-  namespace: openshift-mtv
-spec:
-  map:
-    - source:
-        id: datastore-12345    # VMware datastore ID
-      destination:
-        storageClass: ibm-flash-forklift
-        accessMode: ReadWriteMany
-        volumeMode: Block
-  provider:
-    source:
-      name: vmware-provider
-      namespace: openshift-mtv
-    destination:
-      name: host
-      namespace: openshift-mtv
-```
-
-#### Verify Migration PVC
-
-After starting a migration, verify the PVC is created and bound:
-
-```bash
-# Check PVCs created by Forklift
-kubectl get pvc -n <migration-namespace>
-
-# Should show Bound status immediately (not Pending)
-NAME                    STATUS   VOLUME         CAPACITY   ACCESS MODES   STORAGECLASS
-vm-disk-0               Bound    pvc-abc123     50Gi       RWX            ibm-flash-forklift
-```
-
----
-
 ## Testing and Validation
 
 ### Test 1: Basic PVC Creation
