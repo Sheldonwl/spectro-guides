@@ -35,8 +35,12 @@ Complete guide for deploying Palette with MAAS bare-metal infrastructure and Vir
   - [FlashArray Integration](#flasharray-integration)
 - [VMO (KubeVirt) Configuration](#vmo-kubevirt-configuration)
   - [VMO Prerequisites](#vmo-prerequisites)
+  - [Reference Profiles](#reference-profiles)
   - [VMO Pack Settings](#vmo-pack-settings)
+  - [OIDC Configuration for VMO](#oidc-configuration-for-vmo)
+  - [Custom CA Certificate](#custom-ca-certificate-self-hosted-palette)
   - [VM Networking](#vm-networking)
+  - [Verifying VMO Deployment](#verifying-vmo-deployment)
 - [Pre-Flight Checklist](#pre-flight-checklist)
 - [Deployment Workflow](#deployment-workflow)
   - [Step 1: Verify MAAS is Ready](#step-1-verify-maas-is-ready)
@@ -540,13 +544,26 @@ kubectl create secret generic px-pure-secret \
 
 Before deploying VMO:
 
-| Requirement | Status |
-|-------------|--------|
-| Kubernetes cluster deployed | ✅ |
-| CNI (Cilium) configured | ✅ |
-| MetalLB configured | ✅ |
-| RWX storage (Portworx) available | ✅ |
-| Hardware virtualization enabled | ✅ |
+| Requirement | Status | Notes |
+|-------------|--------|-------|
+| Kubernetes cluster deployed | ✅ | Via Palette with MAAS |
+| CNI (Cilium) configured | ✅ | Recommended for VMO |
+| MetalLB configured | ✅ | For LoadBalancer services |
+| **RWX storage available** | ✅ | **Required for live migration** |
+| Hardware virtualization enabled | ✅ | VT-x/AMD-V in BIOS |
+| br0 bridge on data bond | ✅ | For VM VLAN bridging |
+
+> **⚠️ Live Migration Requires RWX Storage:** VM live migration **only works with RWX (ReadWriteMany) PersistentVolumes**. RWO volumes will NOT allow live migration. Portworx with `sharedv4: true` or similar RWX-capable storage is required.
+
+### Reference Profiles
+
+Spectro Cloud provides **reference profiles** with pre-configured VMO stacks. Contact your Spectro Cloud representative to request access to:
+
+- **VMO Reference Profile** — Complete VMO stack with KubeVirt, CDI, and Dashboard
+- **VMO with Portworx** — VMO with Portworx storage for production workloads
+- **VMO with Rook-Ceph** — VMO with Rook-Ceph storage
+
+These reference profiles include tested configurations and recommended settings.
 
 ### VMO Pack Settings
 
@@ -557,6 +574,86 @@ Before deploying VMO:
 | vlanFiltering | true | VLAN isolation on br0 |
 | allowedVlans | (e.g., 21-100) | VM VLAN range — customize to your environment |
 | accessMode | Proxied or Direct | Dashboard access |
+
+**Access modes:**
+
+| Mode | Description | When to Use | Configuration |
+|------|-------------|-------------|---------------|
+| **Direct** | VMO dashboard accessed via LoadBalancer IP | Palette can reach cluster LB directly | Set `consoleBaseAddress` to LB IP |
+| **Proxied** | VMO dashboard routed through Spectro Proxy | Palette cannot reach cluster directly | Leave `consoleBaseAddress` empty, configure Spectro Proxy |
+
+> **Recommendation:** Use **Direct mode** when possible (simpler, no proxy needed). Only use Proxied mode if Palette cannot reach the cluster's LoadBalancer (e.g., Palette SaaS with on-prem clusters, or isolated networks).
+
+### OIDC Configuration for VMO
+
+VMO requires OIDC for dashboard authentication. Configure this in the **Kubernetes layer** of your cluster profile:
+
+| OIDC IdP Option | Description |
+|-----------------|-------------|
+| **Palette** | Uses Palette as the OIDC provider — **recommended** |
+| **Inherit from Tenant** | Uses the tenant's configured OIDC settings |
+| **Custom** | Manually configure OIDC issuer, client ID, etc. |
+| **None** | No OIDC — VMO authentication will be disabled |
+
+> **⚠️ Warning:** If you select **None**, VMO will run without authentication (anyone can access the dashboard).
+
+**VMO authentication modes:**
+
+| Auth Mode | When Used | Production Ready? |
+|-----------|-----------|-------------------|
+| `oidc` | OIDC fully configured | ✅ Yes |
+| `disabled` | OIDC not configured | ❌ No — anyone can access |
+| `openshift` | OpenShift OAuth | ✅ Yes (OpenShift only) |
+
+### Custom CA Certificate (Self-Hosted Palette)
+
+When using self-hosted Palette with custom/self-signed certificates, VMO must trust the Palette TLS certificate.
+
+**When to configure:**
+- Palette uses a self-signed certificate
+- Palette uses a certificate from a private/internal CA
+- You see `x509: certificate signed by unknown authority` errors
+
+**Step 1: Create the ConfigMap FIRST**
+
+```bash
+# Extract CA from Palette (if needed)
+openssl s_client -connect <palette-url>:443 -showcerts </dev/null 2>/dev/null | \
+  awk '/BEGIN CERTIFICATE/,/END CERTIFICATE/' > palette-ca.crt
+
+# Create ConfigMap in vm-dashboard namespace
+kubectl create configmap custom-ca \
+  --from-file=cert=palette-ca.crt \
+  --namespace vm-dashboard
+```
+
+**Step 2: Enable in VMO Pack**
+
+Only after the ConfigMap exists:
+
+```yaml
+charts:
+  virtual-machine-orchestrator:
+    privateCaCertificate:
+      enabled: true              # Enable AFTER ConfigMap exists!
+      configmapName: custom-ca
+      certificateKey: cert
+      mountPath: /etc/ssl/certs/
+```
+
+**Step 3: Add CA to Cluster Profile (Recommended)**
+
+For MAAS/Ubuntu-based clusters, add the CA certificate to the OS layer:
+
+```yaml
+# In the Ubuntu/MAAS layer of cluster profile
+additionalTrustBundle: |
+  -----BEGIN CERTIFICATE-----
+  <your CA certificate content>
+  -----END CERTIFICATE-----
+```
+
+### VM Networking
 
 **Multus NetworkAttachmentDefinitions:**
 
@@ -579,20 +676,36 @@ spec:
     }
 ```
 
-### VM Networking
-
 **VLAN configuration:**
 - Configure VLAN filtering on br0
-- Set allowed VLANs (e.g., 21-100)
+- Set allowed VLANs per your environment
 - Create NetworkAttachmentDefinitions for each tenant VLAN
 - Ensure switch ports trunk required VLANs
 
-**Access modes:**
+### Verifying VMO Deployment
 
-| Mode | Description | Use Case |
-|------|-------------|----------|
-| **Proxied** | Via Spectro Proxy (frps) | SaaS, restricted networks |
-| **Direct** | Direct LB access | Self-hosted, same network |
+After deploying a cluster with VMO:
+
+```bash
+# Check KubeVirt is healthy
+kubectl get kubevirt -n kubevirt
+
+# Check VMO pods are running
+kubectl get pods -n vm-dashboard
+
+# Check CDI is ready
+kubectl get cdi -n cdi
+
+# Verify storage class is RWX-capable
+kubectl get sc
+```
+
+**Access the VM Dashboard:**
+1. In Palette UI, navigate to the cluster
+2. Click the **Virtual Machines** tab
+3. The VMO dashboard should load in the iframe
+
+> **Self-hosted Palette users:** If the VMO dashboard doesn't load, see the [Self-Hosted Helm Installation Guide](palette-selhhosted-helm-install.md#vmo-gui-issues-on-self-hosted) for GUI troubleshooting (wildcard DNS, CSP, rate limiting).
 
 ---
 
