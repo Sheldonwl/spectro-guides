@@ -49,6 +49,9 @@ Complete guide for deploying Palette with MAAS bare-metal infrastructure and Vir
   - [Step 4: Deploy Bare-Metal Cluster](#step-4-deploy-bare-metal-cluster)
   - [Step 5: Configure VMO](#step-5-configure-vmo)
 - [Troubleshooting](#troubleshooting)
+  - [Node Maintenance & Recovery](#node-maintenance--recovery)
+  - [Changing Network Configuration on Deployed Machines](#changing-network-configuration-on-deployed-machines)
+  - [Storage Considerations When Removing Nodes](#️-storage-considerations-when-removing-nodes)
 
 **Related Guides:**
 - [Network Requirements Reference](palette-network-requirements.md) — Complete port, firewall, and connectivity requirements
@@ -1076,6 +1079,117 @@ kubectl delete maasmachine <maasmachine-name> -n <cluster-namespace>
 ```
 
 Then scale the cluster back up in Palette to provision a replacement node.
+
+---
+
+### Changing Network Configuration on Deployed Machines
+
+Sometimes you need to change network settings (bonds, VLANs, IPs) on a machine that's already deployed and running in a cluster. There are two approaches depending on the scope of changes.
+
+#### Option 1: Manual Netplan Changes (Minor Changes — No Release Required)
+
+For minor changes (IP addresses, DNS, routes, gateway), you can edit the network configuration directly on the running machine:
+
+```bash
+# SSH to the node
+ssh ubuntu@<node-ip>
+
+# View current netplan config
+cat /etc/netplan/50-cloud-init.yaml
+
+# Disable cloud-init network management (prevents overwrite on reboot)
+echo 'network: {config: disabled}' | sudo tee /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg
+
+# Edit the config
+sudo vi /etc/netplan/50-cloud-init.yaml
+
+# Test the config (auto-reverts after 120s if you lose connectivity)
+sudo netplan try --timeout 120
+
+# Apply the config permanently
+sudo netplan apply
+```
+
+**Pros:**
+- No downtime (if done carefully)
+- No CAPI intervention needed
+- No Portworx/storage rebuild
+- Immediate effect
+
+**Cons:**
+- MAAS doesn't know about the changes (out of sync with MAAS UI)
+- Changes are lost if machine is repaved/redeployed
+- Must update MAAS UI separately for future deploys
+
+> **Important:** After making manual changes, also update the machine's network config in MAAS UI so future deploys use the correct settings.
+
+#### Option 2: Release and Redeploy (Major Changes)
+
+For major structural changes (adding/removing bond members, changing bridge configuration, major VLAN changes), the safer approach is to release and redeploy:
+
+**Prerequisites:**
+- Live migrate any VMs off the node first
+- Ensure storage replicas exist on other nodes (Portworx quorum maintained)
+
+**Steps:**
+
+1. **Live migrate VMs (if applicable):**
+   ```bash
+   kubectl get vmi -A -o wide | grep <node-name>
+   virtctl migrate <vm-name> -n <namespace>
+   ```
+
+2. **Put node in maintenance mode (Palette UI):**
+   - Cluster → Nodes → Select node → Actions → Enter Maintenance Mode
+
+3. **Pause the cluster:**
+   ```bash
+   kubectl patch cluster <cluster-name> -n cluster-<UUID> \
+     --type=merge -p '{"spec":{"paused":true}}'
+   ```
+
+4. **Release machine in MAAS:**
+   - MAAS UI → Machines → Select machine → Take Action → Release
+
+5. **Make network changes in MAAS:**
+   - MAAS UI → Machine → Network tab → Modify bonds/VLANs/bridges
+
+6. **Delete the Machine resource:**
+   ```bash
+   kubectl delete machine <machine-name> -n cluster-<UUID>
+   
+   # If stuck, remove finalizer
+   kubectl patch machine <machine-name> -n cluster-<UUID> \
+     -p '{"metadata":{"finalizers":[]}}' --type=merge
+   ```
+
+7. **Unpause cluster to trigger replacement:**
+   ```bash
+   kubectl patch cluster <cluster-name> -n cluster-<UUID> \
+     --type=merge -p '{"spec":{"paused":false}}'
+   ```
+
+8. **Wait for node to rejoin and verify storage health:**
+   ```bash
+   kubectl get machines -n cluster-<UUID> -w
+   pxctl status  # or your storage CLI
+   ```
+
+9. **Repeat for next node** — only proceed when storage is healthy
+
+#### When to Use Each Approach
+
+| Change Type | Recommended Approach |
+|-------------|---------------------|
+| IP address change | Manual netplan |
+| DNS server change | Manual netplan |
+| Add/change routes | Manual netplan |
+| Change gateway | Manual netplan |
+| Add NIC to bond | Release/redeploy |
+| Remove NIC from bond | Release/redeploy |
+| Change bond mode | Release/redeploy |
+| Add/remove bridge | Release/redeploy |
+| Major VLAN restructure | Release/redeploy |
 
 ---
 
