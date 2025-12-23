@@ -29,7 +29,7 @@ Complete guide for deploying Palette with MAAS bare-metal infrastructure and Vir
   - [Cluster Sizing](#cluster-sizing)
   - [CIDR Planning](#cidr-planning)
   - [CNI Selection](#cni-selection)
-- [Storage (Portworx + Pure FlashArray)](#storage-portworx--pure-flasharray)
+- [Storage (Reference: Portworx + Pure FlashArray)](#storage-portworx--pure-flasharray)
   - [Storage Requirements](#storage-requirements)
   - [Portworx Configuration](#portworx-configuration)
   - [FlashArray Integration](#flasharray-integration)
@@ -402,23 +402,23 @@ amd_iommu=on     # For AMD
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                     BARE-METAL HOST                              │
+│                     BARE-METAL HOST                             │
 ├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  ┌──────────────────────┐    ┌──────────────────────┐          │
-│  │     bond_mgmt        │    │     bond_data        │          │
-│  │     (802.3ad)        │    │     (802.3ad)        │          │
-│  │                      │    │                      │          │
-│  │  NIC1 ─┬─► VLAN 10   │    │  NIC3 ─┬─► VLAN 20   │          │
-│  │  NIC2 ─┘   (K8s mgmt)│    │  NIC4 ─┘   (Data)    │          │
-│  │        + PXE native  │    │        + br0 bridge  │          │
-│  └──────────────────────┘    └──────────┬───────────┘          │
+│                                                                 │
+│  ┌──────────────────────┐    ┌──────────────────────┐           │
+│  │     bond_mgmt        │    │     bond_data        │           │
+│  │     (802.3ad)        │    │     (802.3ad)        │           │
+│  │                      │    │                      │           │
+│  │  NIC1 ─┬─► VLAN 10   │    │  NIC3 ─┬─► VLAN 20   │           │
+│  │  NIC2 ─┘   (K8s mgmt)│    │  NIC4 ─┘   (Data)    │           │
+│  │        + PXE native  │    │        + br0 bridge  │           │ 
+│  └──────────────────────┘    └──────────┬───────────┘           │ 
 │                                         │                       │
-│                              ┌──────────▼───────────┐          │
-│                              │        br0           │          │
-│                              │   (Bridge for VMs)   │          │
-│                              │   VM VLANs (e.g. 21+)│          │
-│                              └──────────────────────┘          │
+│                              ┌──────────▼───────────┐           │
+│                              │        br0           │           │
+│                              │   (Bridge for VMs)   │           │
+│                              │   VM VLANs (e.g. 21+)│           │
+│                              └──────────────────────┘           │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -503,7 +503,15 @@ serviceCIDR: 100.64.128.0/17 # 32,768 service IPs
 
 ---
 
-## Storage (Portworx + Pure FlashArray)
+## Storage (Reference: Portworx + Pure FlashArray)
+
+> **ℹ️ Reference Architecture Note:** Portworx with Pure FlashArray is used in this guide as part of the **reference architecture**, but it is **not mandatory**. Any storage solution that meets VMO/KubeVirt requirements can work, including:
+> - **Longhorn** — Lightweight, cloud-native distributed storage
+> - **Rook-Ceph** — Production-grade distributed storage
+> - **Piraeus/LINSTOR** — DRBD-based replication (see [limitations](#piraeus-linstor))
+> - **Local storage** — For non-production or single-node deployments
+>
+> Choose storage based on your performance requirements, existing infrastructure, and operational expertise. The key requirement for VMO is **RWX (ReadWriteMany) support for live migration**.
 
 ### Storage Requirements
 
@@ -589,7 +597,7 @@ Before deploying VMO:
 | Hardware virtualization enabled | ✅ | VT-x/AMD-V in BIOS |
 | br0 bridge on data bond | ✅ | For VM VLAN bridging |
 
-> **⚠️ Live Migration Requires RWX Storage:** VM live migration **only works with RWX (ReadWriteMany) PersistentVolumes**. RWO volumes will NOT allow live migration. Portworx with `sharedv4: true` or similar RWX-capable storage is required.
+> **⚠️ Live Migration Requires RWX Storage:** VM live migration **only works with RWX (ReadWriteMany) PersistentVolumes**. RWO volumes will NOT allow live migration. Use RWX-capable storage such as Portworx (with `sharedv4: true`), Longhorn, or Rook-Ceph.
 
 ### Reference Profiles
 
@@ -639,7 +647,6 @@ VMO requires OIDC for dashboard authentication. Configure this in the **Kubernet
 |-----------|-----------|-------------------|
 | `oidc` | OIDC fully configured | ✅ Yes |
 | `disabled` | OIDC not configured | ❌ No — anyone can access |
-| `openshift` | OpenShift OAuth | ✅ Yes (OpenShift only) |
 
 ### Custom CA Certificate (Self-Hosted Palette)
 
@@ -779,13 +786,13 @@ Complete this checklist **before** starting the [Deployment Workflow](#deploymen
 - [ ] BGP or L2 advertisement mode chosen
 - [ ] Pod/Service CIDRs sized for node count
 
-### 5. Storage (Pure + Portworx)
+### 5. Storage
 
-- [ ] Pure FlashArray reachable (443/TCP)
-- [ ] API token generated
-- [ ] FC/iSCSI zoning complete
-- [ ] ≥1 TB LUN per worker allocated
-- [ ] Portworx Enterprise license
+- [ ] RWX-capable storage selected (Portworx, Longhorn, Rook-Ceph, etc.)
+- [ ] Storage backend reachable (e.g., FlashArray 443/TCP, local disks, etc.)
+- [ ] Zoning/connectivity complete (FC/iSCSI if applicable)
+- [ ] Sufficient capacity allocated (≥1 TB per worker recommended)
+- [ ] Required licenses obtained (if applicable, e.g., Portworx Enterprise)
 
 ### 6. MAAS
 
@@ -927,10 +934,12 @@ Create a cluster profile with the required layers for VMO:
 | Kubernetes | Kubernetes (kubeadm) | Version compatible with VMO |
 | Network | Cilium | VXLAN overlay, kube-proxy replacement |
 | Load Balancer | MetalLB | L2 or BGP mode, IP pool on data VLAN |
-| Storage | Portworx | Enterprise license, FlashArray backend |
+| Storage | Portworx (or alternative) | RWX-capable storage required for live migration |
 | Add-on | VMO | VLAN filtering, allowed VLANs, access mode |
 
 > **Note:** Layer order matters. Add VMO as an add-on pack after core infrastructure is defined.
+>
+> **Storage options:** Portworx is used in this reference architecture, but Longhorn, Rook-Ceph, or other RWX-capable storage solutions work equally well. Choose based on your performance needs and operational expertise.
 
 ### Step 4: Deploy Bare-Metal Cluster
 
