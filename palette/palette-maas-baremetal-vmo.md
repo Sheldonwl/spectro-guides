@@ -11,7 +11,7 @@ Complete guide for deploying Palette with MAAS bare-metal infrastructure and Vir
   - [Network Ports](#maas-network-ports)
   - [PXE Boot Services](#pxe-boot-services)
   - [DNS Configuration](#maas-dns-configuration)
-    - [⚠️ Use a Proper Subdomain, Not Just `.maas`](#️-use-a-proper-subdomain-not-just-maas)
+    - [Use a Proper Subdomain, Not Just `.maas`](#️-use-a-proper-subdomain-not-just-maas)
     - [Recommended DNS Architecture](#recommended-dns-architecture)
     - [Conditional Forwarding](#conditional-forwarding)
   - [BMC/IPMI Requirements](#bmcipmi-requirements)
@@ -88,42 +88,55 @@ This guide covers deploying **VMO (KubeVirt) on bare-metal Kubernetes clusters**
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                         PALETTE VMO ON BARE METAL                                │
-└─────────────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────────┐
+│                            PALETTE VMO ON BARE METAL                                 │
+└──────────────────────────────────────────────────────────────────────────────────────┘
 
-                              ┌──────────────────────┐
-                              │   Palette (Self-     │
-                              │   Hosted or SaaS)    │
-                              │   443 IN/OUT         │
-                              └──────────┬───────────┘
-                                         │
-                              ┌──────────▼───────────┐
-                              │        PCG           │
-                              │  (Private Cloud      │
-                              │   Gateway)           │
-                              │                      │
-                              │  OUT: 443, 6443,     │
-                              │       22, 5240       │
-                              └──────────┬───────────┘
-                                         │
-              ┌──────────────────────────┼──────────────────────────┐
-              │                          │                          │
-              ▼                          ▼                          ▼
-   ┌──────────────────┐      ┌──────────────────────┐    ┌──────────────────┐
-   │   MAAS Server    │      │  Bare-Metal Cluster  │    │  Pure FlashArray │
-   │                  │      │                      │    │                  │
-   │  5240 (API)      │      │  Control Plane (3)   │    │  443 (API)       │
-   │  5248 (HTTP)     │      │  Workers (4-5+)      │    │  FC/iSCSI        │
-   │  67-69 (PXE)     │      │                      │    │                  │
-   └──────────────────┘      │  ┌────────────────┐  │    └──────────────────┘
-                             │  │ VMO (KubeVirt) │  │
-                             │  │ Portworx       │  │
-                             │  │ Cilium CNI     │  │
-                             │  │ MetalLB        │  │
-                             │  └────────────────┘  │
-                             └──────────────────────┘
+                                    ┌────────────────────────┐
+                                    │   Palette (Self-       │
+                                    │   Hosted or SaaS)      │
+                                    │   IN: 443              │
+                                    └────────────────────────┘
+                                         ▲            ▲
+                        PCG outbound 443 │            │ Cluster agents
+                                         │            │ outbound 443
+                    ┌────────────────────┘            └────────────────────┐
+                    │                                                      │
+                    │                                                      │
+       ┌────────────┴─────────┐                           ┌────────────────┴───────────┐
+       │         PCG          │                           │     Bare-Metal Cluster     │
+       │   (Private Cloud     │                           │                            │
+       │    Gateway)          │                           │     Control Plane (3)      │
+       │                      │                           │     Workers (4-5+)         │
+       │   OUT: 443, 6443,    │                           │                            │
+       │        22, 5240      │                           │  ┌──────────────────────┐  │
+       └──────────┬───────────┘                           │  │ VMO (KubeVirt)       │  │
+                  │                                       │  │ Portworx             │  │
+                  │                                       │  │ Cilium CNI           │  │
+                  ▼                                       │  │ MetalLB              │  │
+       ┌──────────────────────┐                           │  └──────────────────────┘  │
+       │     MAAS Server      │  provisions bare metal    │                            │
+       │                      │──────────────────────────►│                            │
+       │     5240 (API)       │                           └─────────────┬──────────────┘
+       │     5248 (HTTP)      │                                         │ storage
+       │     67-69 (PXE)      │                                         ▼
+       └──────────────────────┘                           ┌────────────────────────────┐
+                                                          │     Pure FlashArray        │
+                                                          │     443 (API), FC/iSCSI    │
+                                                          └────────────────────────────┘
 ```
+
+**Communication Flow:**
+
+| Connection | Direction | Port | Purpose |
+|------------|-----------|------|---------|
+| PCG → Palette | Outbound | 443 | API polling, status reporting, gRPC |
+| PCG → Cluster | Outbound | 6443, 22 | Provisioning, K8s API access, SSH |
+| PCG → MAAS | Outbound | 5240 | MAAS API for machine management |
+| **Cluster → Palette** | **Outbound** | **443** | **Agent communication (direct, not via PCG)** |
+| Cluster → Storage | Outbound | 443, iSCSI | Portworx/storage backend |
+
+> ℹ️ **Key Point:** Once deployed, workload clusters communicate **directly** with Palette (outbound 443). The PCG is primarily used for initial provisioning and infrastructure API access. Clusters operate autonomously even if PCG is temporarily unavailable.
 
 ---
 
