@@ -52,8 +52,11 @@ Complete guide for deploying Palette with MAAS bare-metal infrastructure and Vir
   - [Node Maintenance & Recovery](#node-maintenance--recovery)
   - [Changing Network Configuration on Deployed Machines](#changing-network-configuration-on-deployed-machines)
   - [Storage Considerations When Removing Nodes](#️-storage-considerations-when-removing-nodes)
+  - [Wrong IP Address in MAAS DNS Record (Multi-NIC)](#wrong-ip-address-in-maas-dns-record-multi-nic)
+  - [MAAS Installation & Upgrades](#maas-installation--upgrades)
 
 **Related Guides:**
+- [MAAS Installation Guide](maas-install.md) — MAAS installation and upgrades (Snap/Deb)
 - [Network Requirements Reference](palette-network-requirements.md) — Complete port, firewall, and connectivity requirements
 - [Self-Hosted Helm Installation](palette-selhhosted-helm-install.md) — Step-by-step Palette installation
 - [Debugging Guide](palette-debugging.md) — Troubleshooting tips for agents, VMO, OIDC
@@ -74,7 +77,7 @@ This guide covers deploying **VMO (KubeVirt) on bare-metal Kubernetes clusters**
 
 **Prerequisites (not covered here):**
 - **Palette** — Must be running (SaaS or self-hosted). See [Self-Hosted Helm Installation](palette-selhhosted-helm-install.md) if you need to install Palette first.
-- **MAAS** — Must be installed and operational. This guide covers requirements, not installation.
+- **MAAS** — Must be installed and operational. See [MAAS Installation Guide](maas-install.md) for installation steps.
 
 **Official Documentation:**
 - [Spectro Cloud Docs](https://docs.spectrocloud.com/)
@@ -241,22 +244,39 @@ dig palette.example.local       # Should resolve via upstream DNS
 dig google.com                  # Should resolve via upstream forwarders
 
 # From Palette/PCG — resolve MAAS nodes
-dig node1.maas.example.local @192.168.1.50   # Direct query to MAAS DNS
+# Replace IPs with your actual MAAS DNS server and router/forwarder IPs
+dig node1.maas.example.local @<maas-dns-ip>      # Direct query to MAAS DNS
 
 # Test conditional forwarding
-dig maas.example.local @192.168.1.1          # Should forward to MAAS
+dig maas.example.local @<router-or-forwarder-ip> # Should forward to MAAS
 ```
 
 ### BMC/IPMI Requirements
 
-BMC control is required for power-cycling nodes:
+BMC control is required for power-cycling nodes during provisioning and lifecycle management.
 
 | Method | Port | Notes |
 |--------|------|-------|
-| Redfish (recommended) | 443/TCP | Modern, secure |
-| IPMI | 623/UDP | Legacy, configure cipher suite |
+| Redfish (recommended) | 443/TCP | Modern, secure, REST API |
+| IPMI | 623/UDP | Legacy, requires "IPMI over LAN" enabled |
 
 > **Recommendation:** Use Redfish where available for better security and functionality.
+
+#### ⚠️ IPMI over LAN Must Be Enabled
+
+If using IPMI (not Redfish), you must enable **IPMI over LAN** in your server's BMC settings. This is often disabled by default.
+
+| Vendor | BMC Name | How to Enable |
+|--------|----------|---------------|
+| **HPE** | iLO | Administration → Access Settings → Enable "IPMI/DCMI over LAN" |
+| **Dell** | iDRAC | iDRAC Settings → Network → IPMI Settings → Enable IPMI over LAN |
+| **Supermicro** | IPMI/BMC | Configuration → Network → Enable IPMI over LAN |
+| **Lenovo** | XCC/IMM | BMC Configuration → Network → IPMI over LAN → Enabled |
+
+**Additional IPMI considerations:**
+- IPMI uses port **623/UDP** — ensure firewall allows this from MAAS server to BMC network
+- Configure a secure cipher suite (avoid cipher 0 which has no encryption)
+- Use a dedicated BMC/IPMI VLAN for security
 
 ---
 
@@ -792,6 +812,7 @@ Step 2: Deploy PCG
         │
         ├── Register MAAS cloud account in Palette
         ├── Deploy PCG via Palette CLI
+        ├── Configure preferred subnet (for multi-NIC nodes)
         └── Verify PCG shows "Healthy" in Palette UI
         │
         ▼
@@ -843,6 +864,7 @@ maas $PROFILE machine power-query <system_id>
    - Select **MAAS**
    - Enter MAAS API endpoint: `http://<maas-ip>:5240/MAAS`
    - Enter MAAS API key (from MAAS UI: User → API Keys)
+   - **(Important for multi-NIC nodes)** Add preferred subnets if your nodes have multiple NICs
 
 2. **Deploy PCG:**
    First, install the Palette CLI from the official downloads page:
@@ -854,7 +876,30 @@ maas $PROFILE machine power-query <system_id>
    palette pcg install
    ```
 
-3. **Verify PCG Health:**
+3. **Configure Preferred Subnet (Multi-NIC VMO Clusters):**
+   
+   > ⚠️ **Important for VMO with multiple NICs:** If your bare-metal nodes have multiple network interfaces (common with VMO deployments using separate management and data networks), you must configure the preferred subnet. Otherwise, Palette may select the wrong IP address for the Kubernetes API server DNS record.
+
+   After PCG is deployed, apply this ConfigMap to the PCG cluster:
+   
+   ```bash
+   # Apply to PCG cluster - adjust subnet to your management network CIDR
+   cat <<EOF > maas-preferred-subnet.yaml
+   apiVersion: v1
+   kind: ConfigMap
+   metadata:
+     name: maas-preferred-subnet
+     namespace: jet-system
+   data:
+     preferredSubnets: "10.11.10.0/24"  # Your management network CIDR
+   EOF
+
+   kubectl apply -f maas-preferred-subnet.yaml
+   ```
+   
+   This tells Palette which subnet's IP to use for the API server DNS record. Without this, clusters with multiple NICs may be unreachable.
+
+4. **Verify PCG Health:**
    - In Palette UI: **Tenant Settings → Private Cloud Gateways**
    - PCG should show **Healthy** status
    - MAAS machines should be visible in cluster deployment wizard
@@ -1359,6 +1404,55 @@ linstor node delete <node-name>
 | PCG can't reach MAAS | Firewall blocking 5240 | Allow outbound to MAAS |
 | Cluster provisioning stuck | PCG ↔ node SSH failed | Check port 22 access |
 
+### Wrong IP Address in MAAS DNS Record (Multi-NIC)
+
+When machines have multiple NICs (common with VMO deployments), Palette or the PCG might select the wrong IP address for the MAAS DNS record (e.g., selecting the BMC/IPMI network instead of the management network).
+
+**Why this happens:** MAAS machines can have multiple IP addresses across different subnets. When Palette creates the DNS record for the Kubernetes API server, it needs to know which subnet's IP to use. Without explicit configuration, it may pick the wrong one.
+
+**Solution:** Configure the preferred subnet so Palette knows which IP to use for the API server endpoint.
+
+#### Method 1: MAAS Cloud Account Setting (Palette Direct / SaaS)
+
+When configuring your MAAS cloud account in Palette, specify the `preferredSubnets` field:
+
+- In Palette UI: **Tenant Settings → Cloud Accounts → MAAS → Edit** → Add preferred subnets
+- Order matters: subnets are checked in order, first match wins
+- Format: CIDR notation (e.g., `x.x.x.x/24`)
+
+#### Method 2: ConfigMap (PCG Deployments)
+
+For PCG-based deployments, create a ConfigMap in the `jet-system` namespace on the PCG cluster:
+
+```bash
+# Apply to the PCG cluster
+cat <<EOF > maas-preferred-subnet.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: maas-preferred-subnet
+  namespace: jet-system
+data:
+  preferredSubnets: "x.x.x.0/24"
+EOF
+
+kubectl apply -f maas-preferred-subnet.yaml
+```
+
+**How it works:**
+1. Palette detects the ConfigMap in `jet-system` namespace
+2. When provisioning a cluster, Palette copies this ConfigMap to the cluster namespace
+3. The MAAS provider uses this to select the correct IP from the preferred subnet for DNS
+
+**Multiple subnets:** You can specify multiple subnets (comma-separated, first match wins):
+
+```yaml
+data:
+  preferredSubnets: "10.11.10.0/24,10.10.10.0/24"
+```
+
+> ℹ️ **Tip:** After applying this ConfigMap, new clusters will use it automatically. For existing clusters with wrong DNS, you may need to update the MAAS DNS record manually or reprovision affected nodes.
+
 ### VMO Issues
 
 | Symptom | Cause | Fix |
@@ -1375,6 +1469,21 @@ linstor node delete <node-name>
 | Portworx pods failing | FlashArray unreachable | Check 443/TCP to array |
 | PVC stuck Pending | No storage nodes | Verify Portworx cluster health |
 | Poor I/O performance | Wrong storage class | Use `io_profile: auto_journal` |
+
+---
+
+### MAAS Installation & Upgrades
+
+For MAAS installation and upgrade procedures, see the dedicated guide:
+
+📖 **[MAAS Installation Guide](maas-install.md)**
+
+This guide covers:
+- Fresh MAAS installation (Snap recommended, with Deb option)
+- PostgreSQL database setup
+- Post-installation configuration
+- Minor and major version upgrades
+- Best practices when upgrading with Palette clusters running
 
 ---
 
