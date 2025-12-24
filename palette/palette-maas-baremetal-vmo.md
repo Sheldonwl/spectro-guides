@@ -1432,6 +1432,17 @@ When machines have multiple NICs (common with VMO deployments), Palette or the P
 
 **Why this happens:** MAAS machines can have multiple IP addresses across different subnets. When Palette creates the DNS record for the Kubernetes API server, it needs to know which subnet's IP to use. Without explicit configuration, it may pick the wrong one.
 
+**Example scenario:**
+```
+Machine IPs:
+  - 10.11.10.50  ← Management network (correct for K8s API)
+  - 10.20.30.50  ← Data/storage network  
+  - 192.168.100.50 ← BMC/IPMI network (wrong!)
+
+Without preferredSubnets: Palette might pick 192.168.100.50 → cluster unreachable
+With preferredSubnets: "10.11.10.0/24" → Palette picks 10.11.10.50 ✓
+```
+
 **Solution:** Configure the preferred subnet so Palette knows which IP to use for the API server endpoint.
 
 #### Method 1: MAAS Cloud Account Setting (Palette Direct / SaaS)
@@ -1462,9 +1473,24 @@ kubectl apply -f maas-preferred-subnet.yaml
 ```
 
 **How it works:**
-1. Palette detects the ConfigMap in `jet-system` namespace
-2. When provisioning a cluster, Palette copies this ConfigMap to the cluster namespace
-3. The MAAS provider uses this to select the correct IP from the preferred subnet for DNS
+1. You create the ConfigMap in the `jet-system` namespace on the PCG cluster
+2. When provisioning a new cluster, Palette automatically copies this ConfigMap to the cluster's namespace
+3. The MAAS provider iterates through the machine's IP addresses
+4. For each preferred subnet (in order), it checks if any machine IP falls within that CIDR
+5. The **first matching IP** is used for the API server DNS endpoint
+
+**IP Selection Logic:**
+```
+preferredSubnets: "10.11.10.0/24,10.20.30.0/24"
+
+Machine IPs: [192.168.100.50, 10.20.30.50, 10.11.10.50]
+
+Selection process:
+  1. Check 10.11.10.0/24 → Found 10.11.10.50 ✓ → Use this IP
+  2. (10.20.30.0/24 not checked - first match already found)
+
+Result: API server DNS → 10.11.10.50
+```
 
 **Multiple subnets:** You can specify multiple subnets (comma-separated, first match wins):
 
@@ -1474,6 +1500,8 @@ data:
 ```
 
 > ℹ️ **Tip:** After applying this ConfigMap, new clusters will use it automatically. For existing clusters with wrong DNS, you may need to update the MAAS DNS record manually or reprovision affected nodes.
+>
+> 📖 **For existing clusters:** See [Multi-NIC Troubleshooting Guide](maas-multi-nic-troubleshooting.md) for solutions including MAAS DNS updates, kube-apiserver configuration, and Portworx DR setup.
 
 ### VMO Issues
 

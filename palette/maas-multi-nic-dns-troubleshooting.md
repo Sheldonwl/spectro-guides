@@ -149,11 +149,13 @@ maas $MAAS_PROFILE dnsresources read | jq -r --arg name "$CLUSTER_NAME" \
 > maas admin dnsresource delete <id>
 > ```
 
-**Step 3: Update MAAS DNS via Web UI**
+**Step 3: Update MAAS DNS via Web UI (May Not Work for CAPI Entries)**
+
+> ⚠️ **Limitation:** DNS entries created by CAPI/Palette-provisioned clusters often appear **read-only in the MAAS UI** and cannot be edited. If you cannot edit via UI, use the CLI method in Step 2 above — it works regardless of how the entry was created.
 
 1. Go to MAAS UI → **DNS** tab
 2. Find YOUR cluster's DNS record (search for your cluster name, e.g., `dr-cluster-xxx.maas.example.com`)
-3. Edit the record
+3. Try to edit the record — if greyed out or no edit option, use CLI (Step 2)
 4. Remove the PXE/BMC network IP(s), keep only management network IPs
 5. Save
 
@@ -292,12 +294,6 @@ kubeadmconfig:
 4. **All worker nodes** are replaced (rolling)
 5. Full repave can take 30-60+ minutes depending on cluster size
 
-**Code reference:** The repave is triggered because `kubeadmconfig.apiServer.extraArgs` is in the list of K8s repave fields in `hubble/services/service/spectrocluster/internal/service/repave/spectroclusterrepave_detector.go`:
-
-```go
-repaveFields = append(repaveFields, "kubeadmconfig.apiServer.extraArgs")
-```
-
 ---
 
 ### Fix 3: Use Specific IP in Kubeconfig
@@ -341,7 +337,7 @@ KUBECONFIG=kubeconfig-production.yaml kubectl get nodes
 
 ---
 
-### Fix 4: Add IP to Certificate SANs (If Needed)
+### Fix 4: Certificate Errors When Using IP (After Fix 3)
 
 > ✅ **What this fixes:** Certificate validation errors like `x509: certificate is valid for <names>, not <ip>` when connecting via IP (after applying Fix 3).
 >
@@ -351,28 +347,124 @@ KUBECONFIG=kubeconfig-production.yaml kubectl get nodes
 
 If using Fix 3 and getting certificate errors, the API server certificate may not include the IP address as a SAN.
 
-**Check current certificate SANs:**
+**Step 1: Check current certificate SANs**
 
 ```bash
 # On control plane node
 openssl x509 -in /etc/kubernetes/pki/apiserver.crt -text -noout | grep -A1 "Subject Alternative Name"
 ```
 
-**If IP is missing, regenerate certificates:**
+The IP you're using should appear in the list. If it's there, the issue is something else (check the error message carefully).
+
+**Step 2: Quick workaround - skip TLS verification (testing only)**
+
+For quick testing, you can skip certificate validation:
 
 ```bash
-# Backup existing certs
-cp -r /etc/kubernetes/pki /etc/kubernetes/pki.backup
+# Add --insecure-skip-tls-verify to kubectl commands
+KUBECONFIG=kubeconfig-dr.yaml kubectl get nodes --insecure-skip-tls-verify
 
-# Remove old apiserver certs
+# Or modify the kubeconfig to disable cert verification
+# Add "insecure-skip-tls-verify: true" under the cluster entry
+```
+
+> ⚠️ **Warning:** This disables security. Only use for testing, not production.
+
+**Step 3: Proper fix - use Fix 1 instead**
+
+If the IP is genuinely missing from the certificate SANs, the safest approach is:
+
+1. **Use Fix 1** (update MAAS DNS) so you can use the DNS name instead of IP — the DNS name IS in the certificate
+2. Regenerating certificates is risky and can break the cluster if done incorrectly
+
+**Step 4: Regenerate certificates (RISKY - last resort)**
+
+> ⛔ **Warning:** This can break your cluster if the kubeadm config is incomplete or missing. Only proceed if you understand kubeadm certificate management and have a recovery plan.
+
+```bash
+# On control plane node - CHECK what kubeadm will generate BEFORE making changes
+kubeadm certs check-expiration
+
+# Verify kubeadm config exists and looks correct
+cat /etc/kubernetes/kubeadm/kubeadm-config.yaml 2>/dev/null || \
+  kubectl -n kube-system get cm kubeadm-config -o jsonpath='{.data.ClusterConfiguration}'
+
+# If you proceed (AT YOUR OWN RISK):
+# 1. Backup certificates
+cp -r /etc/kubernetes/pki /etc/kubernetes/pki.backup.$(date +%Y%m%d)
+cp -r /etc/kubernetes /root/kubernetes-backup.$(date +%Y%m%d)
+
+# 2. Backup etcd (recommended - defense in depth)
+#    This operation doesn't directly touch etcd, but having a backup is always safer
+ETCDCTL_API=3 etcdctl snapshot save /root/etcd-backup-$(date +%Y%m%d).db \
+  --endpoints=https://127.0.0.1:2379 \
+  --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+  --cert=/etc/kubernetes/pki/etcd/server.crt \
+  --key=/etc/kubernetes/pki/etcd/server.key
+
+# 3. Remove old apiserver certs only
 rm /etc/kubernetes/pki/apiserver.{crt,key}
 
-# Regenerate with additional SANs
-kubeadm init phase certs apiserver --apiserver-cert-extra-sans=10.200.136.19
+# 4. Regenerate - this reads SANs from kubeadm config + adds your extra SAN(s)
+#    For multiple SANs, use comma-separated values (no spaces):
+kubeadm init phase certs apiserver --apiserver-cert-extra-sans=<IP1>,<IP2>,<DNS-NAME>
 
-# Restart apiserver
+# Examples:
+# Single IP:
+#   kubeadm init phase certs apiserver --apiserver-cert-extra-sans=10.200.136.19
+# Multiple IPs:
+#   kubeadm init phase certs apiserver --apiserver-cert-extra-sans=10.200.136.19,10.200.137.20
+# IPs and DNS names:
+#   kubeadm init phase certs apiserver --apiserver-cert-extra-sans=10.200.136.19,my-cluster.example.com
+
+# 5. Verify new cert has correct SANs (including the original ones!)
+openssl x509 -in /etc/kubernetes/pki/apiserver.crt -text -noout | grep -A1 "Subject Alternative Name"
+
+# 6. Restart apiserver (kubelet will restart it automatically, or force restart)
 crictl pods --name kube-apiserver -q | xargs -I {} crictl stopp {}
+
+# 7. Verify cluster is working
+kubectl get nodes
 ```
+
+**If apiserver won't start, restore certificates:**
+
+```bash
+rm -rf /etc/kubernetes/pki
+cp -r /etc/kubernetes/pki.backup.YYYYMMDD /etc/kubernetes/pki
+crictl pods --name kube-apiserver -q | xargs -I {} crictl stopp {}
+
+# Wait for apiserver to restart, then verify
+sleep 30
+kubectl get nodes
+```
+
+**Recovery: Only if the cluster is completely broken (etcd corrupted)**
+
+If certificate restore didn't work and etcd is corrupted (rare):
+
+```bash
+# Stop etcd
+crictl pods --name etcd -q | xargs -I {} crictl stopp {}
+
+# Restore etcd from snapshot
+ETCDCTL_API=3 etcdctl snapshot restore /root/etcd-backup-YYYYMMDD.db \
+  --data-dir=/var/lib/etcd-restore
+
+# Replace etcd data (DESTRUCTIVE - only if everything else failed)
+mv /var/lib/etcd /var/lib/etcd.broken
+mv /var/lib/etcd-restore /var/lib/etcd
+
+# Restart etcd and apiserver
+crictl pods --name etcd -q | xargs -I {} crictl stopp {}
+crictl pods --name kube-apiserver -q | xargs -I {} crictl stopp {}
+
+# Verify
+sleep 60
+kubectl get nodes
+```
+
+> ⚠️ **Note:** etcd restore is a last resort. It rolls back the cluster state to the backup time, losing any changes made after the backup.
 
 ---
 
