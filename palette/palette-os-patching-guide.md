@@ -334,15 +334,22 @@ When Palette's automated patching fails or isn't suitable, you can patch nodes m
 
 ### Before Manual Patching
 
-1. **Put the node in maintenance mode** (recommended):
-   - In Palette UI: Select the node → **⋮** menu → **Enter Maintenance Mode**
-   - This cordons the node and drains workloads safely
+You must drain the node before patching. Choose one of these methods:
 
-2. **Wait for workloads to evacuate:**
-   - VMs (if using VMO) will live-migrate to other nodes
-   - Pods will be rescheduled
+**Option A: Use Palette Maintenance Mode (Recommended)**
 
-3. **Verify the node is drained** before proceeding
+1. In Palette UI: Select the node → **⋮** menu → **Enter Maintenance Mode**
+2. This cordons the node and drains workloads safely
+3. VMs (if using VMO) will live-migrate to other nodes
+4. Wait for workloads to evacuate before proceeding
+
+**Option B: Use kubectl (if no Palette UI access)**
+
+```bash
+NODE_NAME="your-node-name"
+kubectl cordon $NODE_NAME
+kubectl drain $NODE_NAME --ignore-daemonsets --delete-emptydir-data --grace-period=60
+```
 
 ### Manual Patching Script
 
@@ -350,7 +357,7 @@ Use this script to patch nodes directly via SSH. It works in restricted networks
 
 > **Designed for restricted networks:** This script does NOT require keyserver access or external connectivity beyond your package repositories.
 
-**Save as `manual-os-patch.sh` and run with `sudo bash manual-os-patch.sh`**
+**Save as `manual-os-patch.sh`**
 
 ```bash
 #!/bin/bash
@@ -571,14 +578,7 @@ log_message "Log file: $LOG_FILE"
 
 ### How to Use the Script
 
-**Step 1: Drain the node first (recommended)**
-
-```bash
-# From a machine with kubectl access
-NODE_NAME="your-node-name"
-kubectl cordon $NODE_NAME
-kubectl drain $NODE_NAME --ignore-daemonsets --delete-emptydir-data --grace-period=60
-```
+**Step 1: Drain the node** (see [Before Manual Patching](#before-manual-patching))
 
 **Step 2: Copy and run the script on the node**
 
@@ -594,23 +594,24 @@ sudo bash /tmp/manual-os-patch.sh
 sudo bash /tmp/manual-os-patch.sh --reboot
 ```
 
-**Step 3: Uncordon the node after patching**
+**Step 3: Uncordon the node** (see [After Manual Patching](#after-manual-patching))
+
+### After Manual Patching
+
+**Option A: If you used Palette Maintenance Mode**
+
+- In Palette UI: Select the node → **⋮** menu → **Exit Maintenance Mode**
+
+**Option B: If you used kubectl**
 
 ```bash
 kubectl uncordon $NODE_NAME
 ```
 
-### After Manual Patching
-
-1. **Exit maintenance mode:**
-   - In Palette UI: Select the node → **⋮** menu → **Exit Maintenance Mode**
-   - Or the node will automatically uncordon after patching
-
-2. **Verify node status:**
-   - Node should show as Ready in the cluster
-   - Workloads should be able to schedule on the node
-
-3. **Proceed to next node** if patching multiple nodes (one at a time)
+**Then verify:**
+1. Node should show as Ready in the cluster
+2. Workloads should be able to schedule on the node
+3. Proceed to next node if patching multiple nodes (one at a time)
 
 ## Best Practices
 
