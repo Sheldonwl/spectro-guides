@@ -46,6 +46,20 @@ When you trigger an on-demand OS patch from the Palette UI:
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
+### How Node Tracking Works
+
+Palette uses **labels** to track which nodes have been patched:
+
+1. When you trigger On-Demand Update, Palette creates a patching task with a unique version hash
+2. The system selects nodes that don't have this hash in their labels
+3. After successfully patching a node, a label is applied: `task.cluster.spectrocloud.com/on-demand-os-patch=<hash>`
+4. Nodes with the current hash are skipped in future patch runs
+
+**This means:**
+- Running On-Demand Update twice in a row does nothing (nodes already marked)
+- New nodes added to the cluster will be patched (they don't have the marker)
+- To re-patch nodes, you must remove their tracking labels first
+
 ## Using On-Demand Patching
 
 ### Prerequisites
@@ -183,94 +197,20 @@ kubectl get spectrocluster <name> -n <namespace> -o yaml | grep -A5 osPatchConfi
 
 You should see a new `onDemandPatchAfter` time that is in the future.
 
-### Understanding How Patching Tracks Nodes
+### Nodes Already Patched (Want to Re-Patch)
 
-Palette uses a **label-based tracking system** to know which nodes have been patched:
+**Symptoms:** On-Demand Update completes but says no nodes need patching, even though you want to patch them again.
 
-1. When you trigger On-Demand Update, Palette creates a **patching task** with a unique version hash
-2. The system selects nodes that **don't have** this hash in their labels
-3. After successfully patching a node, a label is applied marking it as "patched with this version"
-4. Nodes with the current hash are **skipped** in future patch runs
+**Cause:** Palette uses labels to track which nodes have been patched. Once a node is marked as patched with the current task version, it's skipped.
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         Node Selection Logic                            │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                         │
-│   Patch Task Created (version hash: abc123)                             │
-│                    │                                                    │
-│                    ▼                                                    │
-│   ┌────────────────────────────────────────────────────────────────┐    │
-│   │  Select nodes WHERE:                                           │    │
-│   │    • OS label exists (Linux nodes)                             │    │
-│   │    • Task label ≠ "abc123" (not already patched)               │    │
-│   │    • Task label ≠ "disabled" (not excluded)                    │    │
-│   └────────────────────────────────────────────────────────────────┘    │
-│                    │                                                    │
-│                    ▼                                                    │
-│   Matching nodes are queued for patching (one at a time)                │
-│                    │                                                    │
-│                    ▼                                                    │
-│   After success: Node gets label with task hash                         │
-│                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
+**Solution:** Remove the patch tracking labels from nodes:
+
+```bash
+# On the target cluster - remove patch labels from all nodes
+kubectl label nodes --all task.cluster.spectrocloud.com/on-demand-os-patch-
 ```
 
-**This is why:**
-- Running On-Demand Update twice in a row does nothing (nodes already marked)
-- New nodes added to the cluster will be patched (they don't have the marker)
-- You may need to reset markers to re-patch nodes
-
-### Resetting the Patch State
-
-If you need to **re-run patching on nodes that were already patched**, you must reset the tracking markers.
-
-**When to reset:**
-- Patching completed but you want to run it again
-- A patch run was interrupted and nodes are in an inconsistent state
-- Testing patching behavior
-
-**How to reset:**
-
-1. **Remove the patch tracking labels from nodes**
-   - Each patched node has a label like `task.cluster.spectrocloud.com/on-demand-os-patch=<hash>`
-   - Removing this label makes nodes eligible for patching again
-   - Use kubectl on the target cluster to remove labels from all nodes
-
-2. **Clear the stuck timestamp** (if On-Demand Update isn't working)
-   - Use the Palette API or edit the SpectroCluster resource to clear the `onDemandPatchAfter` field
-
-3. **Trigger a new patch**
-   - Go to **Settings** → **On-Demand Update**
-   - This creates a new patch task with a new version hash
-   - Nodes without the matching label will be selected for patching
-
-### Patching Jobs and Status
-
-For each node being patched, Palette creates a **Kubernetes Job** in the `os-patch` namespace:
-
-| Component | Purpose |
-|-----------|---------|
-| **SpectroSystemTask** | Defines what should happen (patch OS) and which nodes |
-| **Job** | One per node - runs the actual patching container |
-| **Pod** | The patching container that runs on the target node |
-
-**Job naming:** `apply-on-demand-os-patch-on-<node-name>`
-
-**Checking patch status:**
-
-1. Look at Jobs in the `os-patch` namespace
-2. Check Job completion status (Succeeded, Failed, Running)
-3. View Job logs for detailed patching output
-
-**Common Job states:**
-
-| State | Meaning |
-|-------|---------|
-| **Running** | Patching in progress on that node |
-| **Succeeded** | Node was patched successfully |
-| **Failed** | Patching encountered an error |
-| **Pending** | Waiting for resources or scheduling |
+Then trigger On-Demand Update again. Nodes without the label will be selected for patching.
 
 ### Patching Seems Stuck
 
