@@ -194,25 +194,25 @@ Palette uses a **label-based tracking system** to know which nodes have been pat
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                         Node Selection Logic                             │
+│                         Node Selection Logic                            │
 ├─────────────────────────────────────────────────────────────────────────┤
-│                                                                          │
-│   Patch Task Created (version hash: abc123)                              │
-│                    │                                                     │
-│                    ▼                                                     │
+│                                                                         │
+│   Patch Task Created (version hash: abc123)                             │
+│                    │                                                    │
+│                    ▼                                                    │
 │   ┌────────────────────────────────────────────────────────────────┐    │
-│   │  Select nodes WHERE:                                            │    │
-│   │    • OS label exists (Linux nodes)                              │    │
-│   │    • Task label ≠ "abc123" (not already patched)                │    │
-│   │    • Task label ≠ "disabled" (not excluded)                     │    │
+│   │  Select nodes WHERE:                                           │    │
+│   │    • OS label exists (Linux nodes)                             │    │
+│   │    • Task label ≠ "abc123" (not already patched)               │    │
+│   │    • Task label ≠ "disabled" (not excluded)                    │    │
 │   └────────────────────────────────────────────────────────────────┘    │
-│                    │                                                     │
-│                    ▼                                                     │
-│   Matching nodes are queued for patching (one at a time)                 │
-│                    │                                                     │
-│                    ▼                                                     │
-│   After success: Node gets label with task hash                          │
-│                                                                          │
+│                    │                                                    │
+│                    ▼                                                    │
+│   Matching nodes are queued for patching (one at a time)                │
+│                    │                                                    │
+│                    ▼                                                    │
+│   After success: Node gets label with task hash                         │
+│                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
