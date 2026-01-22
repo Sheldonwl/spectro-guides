@@ -10,6 +10,12 @@ A practical guide to using the Palette REST API, including authentication, commo
 - [Debugging API Issues](#debugging-api-issues)
 - [Common Errors](#common-errors)
 - [Examples](#examples)
+  - [Example 1: Clear Stuck On-Demand OS Patch](#example-1-clear-stuck-on-demand-os-patch)
+  - [Example 2: Get Cluster Status and Details](#example-2-get-cluster-status-and-details)
+  - [Example 3: List All Clusters Across All Projects](#example-3-list-all-clusters-across-all-projects)
+  - [Example 4: Debug API Key Permissions](#example-4-debug-api-key-permissions)
+  - [Example 5: Download Kubeconfig by Cluster Name](#example-5-download-kubeconfig-by-cluster-name)
+- [Quick Reference](#quick-reference)
 
 ---
 
@@ -561,6 +567,134 @@ Edge - ghi789xyz012ghi789xyz012
 Virtual Machines - jkl012mno345jkl012mno345
 ```
 
+### Example 5: Download Kubeconfig by Cluster Name
+
+```bash
+#!/bin/bash
+# Usage: ./get-kubeconfig.sh <cluster-name> [--admin] [output-file]
+# Downloads kubeconfig for a cluster by its human-readable name
+#
+# Options:
+#   --admin    Download admin kubeconfig (with embedded certs, no OIDC)
+#   Default is OIDC kubeconfig (requires browser login)
+
+CLUSTER_NAME="${1:?Usage: $0 <cluster-name> [--admin] [output-file]}"
+
+# Check for --admin flag
+ADMIN_FLAG=""
+if [[ "$2" == "--admin" ]]; then
+    ADMIN_FLAG="admin"
+    OUTPUT_FILE="${3:-${CLUSTER_NAME}-admin.kubeconfig}"
+else
+    OUTPUT_FILE="${2:-${CLUSTER_NAME}.kubeconfig}"
+fi
+
+# These must be set in your environment
+: "${PALETTE_URL:?Set PALETTE_URL environment variable}"
+: "${API_KEY:?Set API_KEY environment variable}"
+
+echo "Searching for cluster: $CLUSTER_NAME"
+
+# Search all projects for the cluster
+RESULT=$(python3 << EOF
+import subprocess, json, sys
+
+def api_get(path, project_uid=None):
+    cmd = ["curl", "-s", f"$PALETTE_URL{path}", "-H", f"ApiKey: $API_KEY"]
+    if project_uid:
+        cmd.extend(["-H", f"ProjectUid: {project_uid}"])
+    try:
+        return json.loads(subprocess.check_output(cmd, stderr=subprocess.DEVNULL))
+    except:
+        return {}
+
+# Get all projects
+projects = api_get("/v1/projects").get("items", [])
+
+for proj in projects:
+    puid = proj["metadata"]["uid"]
+    clusters = api_get("/v1/spectroclusters", puid).get("items", []) or []
+    for c in clusters:
+        if c["metadata"]["name"] == "$CLUSTER_NAME":
+            print(f"{puid}|{c['metadata']['uid']}")
+            sys.exit(0)
+
+sys.exit(1)
+EOF
+)
+
+if [ -z "$RESULT" ]; then
+    echo "Error: Cluster '$CLUSTER_NAME' not found in any project"
+    exit 1
+fi
+
+PROJECT_UID=$(echo "$RESULT" | cut -d'|' -f1)
+CLUSTER_UID=$(echo "$RESULT" | cut -d'|' -f2)
+
+echo "Found cluster in project: $PROJECT_UID"
+echo "Cluster UID: $CLUSTER_UID"
+echo "Downloading kubeconfig to: $OUTPUT_FILE"
+
+# Use admin endpoint if --admin flag was passed
+if [ -n "$ADMIN_FLAG" ]; then
+    ENDPOINT="adminKubeconfig"
+    echo "Using admin kubeconfig (embedded certs)"
+else
+    ENDPOINT="kubeconfig"
+    echo "Using OIDC kubeconfig"
+fi
+
+curl -s "$PALETTE_URL/v1/spectroclusters/$CLUSTER_UID/assets/$ENDPOINT" \
+  -H "ApiKey: $API_KEY" \
+  -H "ProjectUid: $PROJECT_UID" > "$OUTPUT_FILE"
+
+if grep -q "apiVersion" "$OUTPUT_FILE"; then
+    echo "Success! Kubeconfig saved to: $OUTPUT_FILE"
+    echo "Use with: export KUBECONFIG=$OUTPUT_FILE"
+else
+    echo "Error downloading kubeconfig:"
+    cat "$OUTPUT_FILE"
+    rm -f "$OUTPUT_FILE"
+    exit 1
+fi
+```
+
+**Quick one-liner version** (if you know the project):
+
+```bash
+# Set these first
+export PALETTE_URL="https://your-palette.console.spectrocloud.com"
+export API_KEY="your-api-key"
+export PROJECT_UID="your-project-uid"
+
+# Download kubeconfig by name
+CLUSTER_NAME="my-cluster"
+CLUSTER_UID=$(curl -s "$PALETTE_URL/v1/spectroclusters" \
+  -H "ApiKey: $API_KEY" \
+  -H "ProjectUid: $PROJECT_UID" | \
+  jq -r ".items[] | select(.metadata.name==\"$CLUSTER_NAME\") | .metadata.uid")
+
+# OIDC kubeconfig (requires browser login)
+curl -s "$PALETTE_URL/v1/spectroclusters/$CLUSTER_UID/assets/kubeconfig" \
+  -H "ApiKey: $API_KEY" \
+  -H "ProjectUid: $PROJECT_UID" > "${CLUSTER_NAME}.kubeconfig"
+
+# OR Admin kubeconfig (embedded certs, no login needed)
+curl -s "$PALETTE_URL/v1/spectroclusters/$CLUSTER_UID/assets/adminKubeconfig" \
+  -H "ApiKey: $API_KEY" \
+  -H "ProjectUid: $PROJECT_UID" > "${CLUSTER_NAME}-admin.kubeconfig"
+```
+
+**Example output:**
+```
+Searching for cluster: prod-cluster-01
+Found cluster in project: abc123def456abc123def456
+Cluster UID: xyz789abc123xyz789abc123
+Downloading kubeconfig to: prod-cluster-01.kubeconfig
+Success! Kubeconfig saved to: prod-cluster-01.kubeconfig
+Use with: export KUBECONFIG=prod-cluster-01.kubeconfig
+```
+
 ---
 
 ## Quick Reference
@@ -586,6 +720,8 @@ Virtual Machines - jkl012mno345jkl012mno345
 | List projects | GET | `/v1/projects` |
 | List clusters | GET | `/v1/spectroclusters` (+ ProjectUid header) |
 | Get cluster | GET | `/v1/spectroclusters/{uid}` (+ ProjectUid header) |
+| Download kubeconfig (OIDC) | GET | `/v1/spectroclusters/{uid}/assets/kubeconfig` (+ ProjectUid header) |
+| Download kubeconfig (Admin) | GET | `/v1/spectroclusters/{uid}/assets/adminKubeconfig` (+ ProjectUid header) |
 | Update OS patch config | PATCH | `/v1/spectroclusters/{uid}/clusterConfig/osPatch` |
 
 ### Error Quick Reference
