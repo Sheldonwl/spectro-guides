@@ -10,11 +10,11 @@ A practical guide to using the Palette REST API, including authentication, commo
 - [Debugging API Issues](#debugging-api-issues)
 - [Common Errors](#common-errors)
 - [Examples](#examples)
-  - [Example 1: Clear Stuck On-Demand OS Patch](#example-1-clear-stuck-on-demand-os-patch)
-  - [Example 2: Get Cluster Status and Details](#example-2-get-cluster-status-and-details)
-  - [Example 3: List All Clusters Across All Projects](#example-3-list-all-clusters-across-all-projects)
+  - [Example 1: Get Cluster Status and Details](#example-1-get-cluster-status-and-details)
+  - [Example 2: List All Clusters Across All Projects](#example-2-list-all-clusters-across-all-projects)
+  - [Example 3: Download Kubeconfig by Cluster Name](#example-3-download-kubeconfig-by-cluster-name)
   - [Example 4: Debug API Key Permissions](#example-4-debug-api-key-permissions)
-  - [Example 5: Download Kubeconfig by Cluster Name](#example-5-download-kubeconfig-by-cluster-name)
+  - [Example 5: Clear Stuck On-Demand OS Patch](#example-5-clear-stuck-on-demand-os-patch)
 - [Quick Reference](#quick-reference)
 
 ---
@@ -369,37 +369,7 @@ If your cluster isn't in the list, either:
 
 ## Examples
 
-### Example 1: Clear Stuck On-Demand OS Patch
-
-When On-Demand Update won't trigger because the timestamp is stuck:
-
-```bash
-PALETTE_URL="https://your-palette.console.spectrocloud.com"
-API_KEY="your-api-key"
-PROJECT_UID="abc123"  # From URL
-CLUSTER_UID="def456"  # From URL
-
-# Clear the onDemandPatchAfter field
-curl -X PATCH "$PALETTE_URL/v1/spectroclusters/$CLUSTER_UID/clusterConfig/osPatch" \
-  -H "ApiKey: $API_KEY" \
-  -H "ProjectUid: $PROJECT_UID" \
-  -H "Content-Type: application/json" \
-  -d '{"onDemandPatchAfter":""}'
-
-# Verify it's cleared (should show zero time or empty)
-curl -s "$PALETTE_URL/v1/spectroclusters/$CLUSTER_UID" \
-  -H "ApiKey: $API_KEY" \
-  -H "ProjectUid: $PROJECT_UID" | grep -o '"onDemandPatchAfter":"[^"]*"'
-```
-
-**Example output after clearing:**
-```
-"onDemandPatchAfter":"0001-01-01T00:00:00.000Z"
-```
-
-The zero time (`0001-01-01T00:00:00.000Z`) indicates the field has been cleared. You can now trigger a new On-Demand Update from the UI.
-
-### Example 2: Get Cluster Status and Details
+### Example 1: Get Cluster Status and Details
 
 ```bash
 PALETTE_URL="https://your-palette.console.spectrocloud.com"
@@ -470,7 +440,7 @@ WorkerNodeAdditionDone         True
 WorkerNodeDeletionDone         True
 ```
 
-### Example 3: List All Clusters Across All Projects
+### Example 2: List All Clusters Across All Projects
 
 ```bash
 # Uses your existing environment variables: $PALETTE_URL and $API_KEY
@@ -526,48 +496,7 @@ EOF
   vm-cluster-01                  Running
 ```
 
-### Example 4: Debug API Key Permissions
-
-```bash
-PALETTE_URL="https://your-palette.console.spectrocloud.com"
-API_KEY="your-api-key"
-
-# Check what permissions the API key has
-echo "=== User Identity ==="
-curl -s "$PALETTE_URL/v1/users/me" -H "ApiKey: $API_KEY" | \
-  python3 -c "import sys,json; u=json.load(sys.stdin)['spec']; print(f'Name: {u.get(\"firstName\",\"\")} {u.get(\"lastName\",\"\")}\nEmail: {u.get(\"emailId\",\"\")}')"
-
-echo -e "\n=== Cluster Permissions ==="
-curl -s "$PALETTE_URL/v1/users/me" -H "ApiKey: $API_KEY" | \
-  grep -o '"cluster\.[^"]*"' | sort -u | head -10
-
-echo -e "\n=== Projects with Access ==="
-curl -s "$PALETTE_URL/v1/projects" -H "ApiKey: $API_KEY" | \
-  python3 -c "import sys,json; [print(f'{p[\"metadata\"][\"name\"]} - {p[\"metadata\"][\"uid\"]}') for p in json.load(sys.stdin).get('items',[])]"
-```
-
-**Example output:**
-```
-=== User Identity ===
-Name: John Smith
-Email: john.smith@example.com
-
-=== Cluster Permissions ===
-"cluster.create"
-"cluster.delete"
-"cluster.get"
-"cluster.import"
-"cluster.list"
-"cluster.update"
-
-=== Projects with Access ===
-Production - abc123def456abc123def456
-Development - def456abc123def456abc123
-Edge - ghi789xyz012ghi789xyz012
-Virtual Machines - jkl012mno345jkl012mno345
-```
-
-### Example 5: Download Kubeconfig by Cluster Name
+### Example 3: Download Kubeconfig by Cluster Name
 
 ```bash
 #!/bin/bash
@@ -694,6 +623,77 @@ Downloading kubeconfig to: prod-cluster-01.kubeconfig
 Success! Kubeconfig saved to: prod-cluster-01.kubeconfig
 Use with: export KUBECONFIG=prod-cluster-01.kubeconfig
 ```
+
+### Example 4: Debug API Key Permissions
+
+```bash
+PALETTE_URL="https://your-palette.console.spectrocloud.com"
+API_KEY="your-api-key"
+
+# Check what permissions the API key has
+echo "=== User Identity ==="
+curl -s "$PALETTE_URL/v1/users/me" -H "ApiKey: $API_KEY" | \
+  python3 -c "import sys,json; u=json.load(sys.stdin)['spec']; print(f'Name: {u.get(\"firstName\",\"\")} {u.get(\"lastName\",\"\")}\nEmail: {u.get(\"emailId\",\"\")}')"
+
+echo -e "\n=== Cluster Permissions ==="
+curl -s "$PALETTE_URL/v1/users/me" -H "ApiKey: $API_KEY" | \
+  grep -o '"cluster\.[^"]*"' | sort -u | head -10
+
+echo -e "\n=== Projects with Access ==="
+curl -s "$PALETTE_URL/v1/projects" -H "ApiKey: $API_KEY" | \
+  python3 -c "import sys,json; [print(f'{p[\"metadata\"][\"name\"]} - {p[\"metadata\"][\"uid\"]}') for p in json.load(sys.stdin).get('items',[])]"
+```
+
+**Example output:**
+```
+=== User Identity ===
+Name: John Smith
+Email: john.smith@example.com
+
+=== Cluster Permissions ===
+"cluster.create"
+"cluster.delete"
+"cluster.get"
+"cluster.import"
+"cluster.list"
+"cluster.update"
+
+=== Projects with Access ===
+Production - abc123def456abc123def456
+Development - def456abc123def456abc123
+Edge - ghi789xyz012ghi789xyz012
+Virtual Machines - jkl012mno345jkl012mno345
+```
+
+### Example 5: Clear Stuck On-Demand OS Patch
+
+When On-Demand Update won't trigger because the timestamp is stuck:
+
+```bash
+PALETTE_URL="https://your-palette.console.spectrocloud.com"
+API_KEY="your-api-key"
+PROJECT_UID="abc123"  # From URL
+CLUSTER_UID="def456"  # From URL
+
+# Clear the onDemandPatchAfter field
+curl -X PATCH "$PALETTE_URL/v1/spectroclusters/$CLUSTER_UID/clusterConfig/osPatch" \
+  -H "ApiKey: $API_KEY" \
+  -H "ProjectUid: $PROJECT_UID" \
+  -H "Content-Type: application/json" \
+  -d '{"onDemandPatchAfter":""}'
+
+# Verify it's cleared (should show zero time or empty)
+curl -s "$PALETTE_URL/v1/spectroclusters/$CLUSTER_UID" \
+  -H "ApiKey: $API_KEY" \
+  -H "ProjectUid: $PROJECT_UID" | grep -o '"onDemandPatchAfter":"[^"]*"'
+```
+
+**Example output after clearing:**
+```
+"onDemandPatchAfter":"0001-01-01T00:00:00.000Z"
+```
+
+The zero time (`0001-01-01T00:00:00.000Z`) indicates the field has been cleared. You can now trigger a new On-Demand Update from the UI.
 
 ---
 
