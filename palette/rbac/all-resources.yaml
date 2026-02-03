@@ -1,0 +1,219 @@
+# all-resources.yaml
+# Complete RBAC setup for OIDC with Palette and ADFS
+#
+# This file contains all namespaces, roles, and bindings needed for
+# the OIDC RBAC example with 3 user types:
+#   - platform-admins: Full cluster access
+#   - developers: Full access to development namespace
+#   - devops: Deploy-only access to staging and production
+#
+# Apply with: kubectl apply -f all-resources.yaml
+
+# ============ NAMESPACES ============
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: development
+  labels:
+    environment: development
+    team: developers
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: staging
+  labels:
+    environment: staging
+    team: devops
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: production
+  labels:
+    environment: production
+    team: devops
+
+# ============ CLUSTER ROLES ============
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: platform-admin
+rules:
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["*"]
+  - nonResourceURLs: ["*"]
+    verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cluster-viewer
+rules:
+  - apiGroups: ["", "apps", "batch", "networking.k8s.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["nodes", "namespaces"]
+    verbs: ["get", "list", "watch"]
+
+# ============ ROLES ============
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: development
+  name: developer-full-access
+rules:
+  # Full access to workloads
+  - apiGroups: ["", "apps", "batch"]
+    resources: ["pods", "deployments", "deployments/scale", "replicasets", "statefulsets", "daemonsets", "jobs", "cronjobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Full access to services and networking
+  - apiGroups: ["", "networking.k8s.io"]
+    resources: ["services", "endpoints", "ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Full access to config and secrets
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Pod logs, exec, and port-forward
+  - apiGroups: [""]
+    resources: ["pods/log", "pods/exec", "pods/portforward"]
+    verbs: ["get", "create"]
+  # PVCs
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: staging
+  name: devops-deploy-access
+rules:
+  # Read and update deployments (for CI/CD)
+  - apiGroups: ["apps"]
+    resources: ["deployments", "deployments/scale", "replicasets", "statefulsets"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  # Read-only for pods and services
+  - apiGroups: [""]
+    resources: ["pods", "services", "endpoints"]
+    verbs: ["get", "list", "watch"]
+  # Pod logs (no exec in staging/prod)
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  # Read and update configmaps
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  # Read secrets (needed for deployments)
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: production
+  name: devops-deploy-access
+rules:
+  # Read and update deployments (for CI/CD)
+  - apiGroups: ["apps"]
+    resources: ["deployments", "deployments/scale", "replicasets", "statefulsets"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  # Read-only for pods and services
+  - apiGroups: [""]
+    resources: ["pods", "services", "endpoints"]
+    verbs: ["get", "list", "watch"]
+  # Pod logs (no exec in staging/prod)
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  # Read and update configmaps
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  # Read secrets (needed for deployments)
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+
+# ============ CLUSTER ROLE BINDINGS ============
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: platform-admins-full-access
+subjects:
+  - kind: Group
+    name: platform-admins     # Must match Palette Team name
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: platform-admin
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: all-teams-cluster-viewer
+subjects:
+  - kind: Group
+    name: developers          # Must match Palette Team name
+    apiGroup: rbac.authorization.k8s.io
+  - kind: Group
+    name: devops              # Must match Palette Team name
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: cluster-viewer
+  apiGroup: rbac.authorization.k8s.io
+
+# ============ ROLE BINDINGS ============
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: developers-development-access
+  namespace: development
+subjects:
+  - kind: Group
+    name: developers          # Must match Palette Team name
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: developer-full-access
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devops-staging-access
+  namespace: staging
+subjects:
+  - kind: Group
+    name: devops              # Must match Palette Team name
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: devops-deploy-access
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devops-production-access
+  namespace: production
+subjects:
+  - kind: Group
+    name: devops              # Must match Palette Team name
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: devops-deploy-access
+  apiGroup: rbac.authorization.k8s.io
